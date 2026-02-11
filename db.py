@@ -61,6 +61,20 @@ async def init_db():
         await conn.executescript(SCHEMA)
         await conn.commit()
 
+        # Migrations — add IPNS columns (idempotent)
+        migrations = [
+            "ALTER TABLE users ADD COLUMN ipns_key_name TEXT",
+            "ALTER TABLE users ADD COLUMN ipns_name TEXT",
+            "ALTER TABLE users ADD COLUMN linktree_cid TEXT",
+            "ALTER TABLE users ADD COLUMN ipns_key_backup TEXT",
+        ]
+        for sql in migrations:
+            try:
+                await conn.execute(sql)
+            except Exception:
+                pass  # column already exists
+        await conn.commit()
+
 
 # --- Users ---
 
