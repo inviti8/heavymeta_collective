@@ -3,7 +3,12 @@ import db
 from nicegui import ui, app
 from fastapi import Request, HTTPException
 import os
-from components import style_page, form_field, image_with_text, dashboard_nav, dashboard_header
+import httpx
+from components import (
+    style_page, form_field, image_with_text,
+    dashboard_nav, dashboard_header,
+    hide_dashboard_chrome, show_dashboard_chrome,
+)
 from auth import (
     validate_signup_form, login_user, set_session, require_auth, require_coop,
     hash_password,
@@ -13,6 +18,8 @@ from payments.pricing import XLM_COST, get_xlm_usd_equivalent, get_stripe_price_
 from payments.stellar_pay import create_stellar_payment_request, check_payment
 from payments.stripe_pay import create_checkout_session, handle_webhook
 from launch import generate_launch_credentials
+import ipfs_client
+import time as _time
 
 static_files_dir = os.path.join(os.path.dirname(__file__), 'static')
 app.add_static_files('/static', static_files_dir)
@@ -378,9 +385,10 @@ async def profile():
     member_type = app.storage.user.get('member_type', 'free')
     psettings = await db.get_profile_settings(user_id)
 
-    dashboard_header(moniker, member_type, user_id=user_id,
-                     override_enabled=bool(psettings['linktree_override']),
-                     override_url=psettings['linktree_url'])
+    header = dashboard_header(moniker, member_type, user_id=user_id,
+                              override_enabled=bool(psettings['linktree_override']),
+                              override_url=psettings['linktree_url'])
+    show_dashboard_chrome(header)
 
     with ui.column().classes('w-full items-center gap-4 pb-24'):
         # Upgrade CTA for free users
@@ -498,7 +506,7 @@ async def profile():
     dashboard_nav(active='dashboard')
 
 
-# ─── Card Editor (shell) ────────────────────────────────────────────────────
+# ─── Card Editor (Three.js) ─────────────────────────────────────────────────
 
 @ui.page('/card/editor')
 async def card_editor():
@@ -511,28 +519,84 @@ async def card_editor():
     member_type = app.storage.user.get('member_type', 'free')
     psettings = await db.get_profile_settings(user_id)
 
-    dashboard_header(moniker, member_type, user_id=user_id,
-                     override_enabled=bool(psettings['linktree_override']),
-                     override_url=psettings['linktree_url'])
+    existing_front_cid = user['nfc_image_cid'] if user else None
+    existing_back_cid = user['nfc_back_image_cid'] if user else None
+    initial_front_url = f'{config.KUBO_GATEWAY}/ipfs/{existing_front_cid}' if existing_front_cid else ''
+    initial_back_url = f'{config.KUBO_GATEWAY}/ipfs/{existing_back_cid}' if existing_back_cid else ''
 
-    with ui.column().classes('w-full items-center gap-4 pb-24'):
-        with ui.column().classes('w-[75vw] gap-4'):
-            # Editor tabs
-            with ui.row().classes('gap-2'):
-                ui.button('PREVIEW', on_click=lambda: None).classes('px-4 py-1')
-                ui.button('CODE', on_click=lambda: None).props('outline').classes('px-4 py-1')
-                ui.space()
-                ui.button('DELETE', on_click=lambda: None).props('flat color=red').classes('px-4 py-1')
+    # Header hidden, footer visible
+    header = dashboard_header(moniker, member_type, user_id=user_id,
+                              override_enabled=bool(psettings['linktree_override']),
+                              override_url=psettings['linktree_url'])
+    hide_dashboard_chrome(header)
 
-            # Card preview area
-            with ui.card().classes('w-full aspect-video'):
-                ui.image('/static/placeholder.png').classes('w-full h-full').props('fit=cover')
+    # Three.js import map + full-viewport CSS
+    ui.add_head_html('''
+    <script type="importmap">
+    { "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }}
+    </script>
+    <style>
+      .q-page-container { padding-top: 0 !important; }
+      .q-layout { pointer-events: none; }
+      .q-footer { pointer-events: auto; }
+      #card-scene { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 500; }
+    </style>
+    ''')
 
-            # Placeholder controls
-            with ui.card().classes('w-full p-4 gap-2'):
-                ui.label('CARD DESIGN').classes('text-lg font-bold')
-                ui.label('Upload an image or edit the HTML for your NFC card.').classes('text-sm opacity-70')
-                ui.button('UPLOAD IMAGE', on_click=lambda: None).classes('mt-2')
+    # File upload bridge (Python side)
+    async def process_upload():
+        try:
+            result = await ui.run_javascript(
+                'return {data: window.__cardUploadData, face: window.__cardUploadFace}',
+                timeout=5.0,
+            )
+        except TimeoutError:
+            ui.notify('Image too large for upload. Try a smaller file.', type='warning')
+            return
+        except Exception as e:
+            ui.notify(f'Could not read image data: {e}', type='warning')
+            return
+
+        b64_data = result.get('data') if result else None
+        face = result.get('face', 'front') if result else 'front'
+        if not b64_data:
+            ui.notify('No image data received', type='warning')
+            return
+
+        cid_column = 'nfc_image_cid' if face == 'front' else 'nfc_back_image_cid'
+        filename = 'nfc_card_front.png' if face == 'front' else 'nfc_card_back.png'
+
+        try:
+            import base64
+            content = base64.b64decode(b64_data)
+            user_row = await db.get_user_by_id(user_id)
+            old_cid = user_row[cid_column]
+            new_cid = await ipfs_client.replace_asset(content, old_cid, filename)
+            await db.update_user(user_id, **{cid_column: new_cid})
+            texture_url = f'{config.KUBO_GATEWAY}/ipfs/{new_cid}'
+            await ui.run_javascript(f"window.updateCardTexture('{face}', '{texture_url}')")
+            ui.notify(f'Card {face} image saved', type='positive')
+        except httpx.ConnectError:
+            ui.notify('IPFS daemon not running — preview applied but not saved',
+                      type='warning')
+        except Exception as e:
+            ui.notify(f'Upload failed: {e}', type='negative')
+
+    # Off-screen (not display:none) so programmatic .click() triggers Vue events
+    upload_trigger = ui.button(on_click=process_upload).props(
+        'id=card-upload-trigger').style('position:absolute;left:-9999px;')
+
+    # Three.js scene container + JS module (cache-bust with timestamp)
+    _cache_v = int(_time.time())
+    ui.add_body_html(f'''
+    <div id="card-scene"
+         data-front-texture="{initial_front_url}"
+         data-back-texture="{initial_back_url}"></div>
+    <script type="module" src="/static/js/card_scene.js?v={_cache_v}"></script>
+    ''')
 
     dashboard_nav(active='card_editor')
 
@@ -550,9 +614,10 @@ async def card_case():
     member_type = app.storage.user.get('member_type', 'free')
     psettings = await db.get_profile_settings(user_id)
 
-    dashboard_header(moniker, member_type, user_id=user_id,
-                     override_enabled=bool(psettings['linktree_override']),
-                     override_url=psettings['linktree_url'])
+    header = dashboard_header(moniker, member_type, user_id=user_id,
+                              override_enabled=bool(psettings['linktree_override']),
+                              override_url=psettings['linktree_url'])
+    hide_dashboard_chrome(header)
 
     with ui.column().classes('w-full items-center gap-4 pb-24'):
         with ui.column().classes('w-[75vw] gap-4'):
@@ -593,9 +658,10 @@ async def settings():
     member_type = app.storage.user.get('member_type', 'free')
     psettings = await db.get_profile_settings(user_id)
 
-    dashboard_header(moniker, member_type, user_id=user_id,
-                     override_enabled=bool(psettings['linktree_override']),
-                     override_url=psettings['linktree_url'])
+    header = dashboard_header(moniker, member_type, user_id=user_id,
+                              override_enabled=bool(psettings['linktree_override']),
+                              override_url=psettings['linktree_url'])
+    show_dashboard_chrome(header)
 
     colors = await db.get_profile_colors(user_id)
 

@@ -67,6 +67,7 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN ipns_name TEXT",
             "ALTER TABLE users ADD COLUMN linktree_cid TEXT",
             "ALTER TABLE users ADD COLUMN ipns_key_backup TEXT",
+            "ALTER TABLE users ADD COLUMN nfc_back_image_cid TEXT",
         ]
         for sql in migrations:
             try:

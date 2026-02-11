@@ -49,7 +49,8 @@ def dashboard_nav(active='dashboard'):
     """Bottom navigation bar for dashboard views. active = 'dashboard' | 'card_editor' | 'card_case'."""
     with ui.footer().classes(
         'bg-[#8c52ff] flex justify-around items-center py-3'
-    ):
+        ' transition-all duration-300 transform translate-y-0'
+    ) as footer:
         items = [
             ('badge', '/profile/edit', 'dashboard'),
             ('palette', '/card/editor', 'card_editor'),
@@ -61,6 +62,7 @@ def dashboard_nav(active='dashboard'):
                 icon=icon,
                 on_click=lambda r=route: ui.navigate.to(r),
             ).props(f'flat round').style(f'color: {color}; font-size: 26px;')
+    return footer
 
 
 def dashboard_header(moniker, member_type, user_id=None,
@@ -71,7 +73,8 @@ def dashboard_header(moniker, member_type, user_id=None,
     with ui.header(
     ).classes(
         'text-black justify-start items-center bg-gradient-to-r from-[#f2d894] to-[#d6a5e2] pl-6'
-    ).style('position: relative;'):
+        ' transition-all duration-300 transform translate-y-0'
+    ).style('position: relative;') as header:
         # Top-right icon buttons
         with ui.row().classes('absolute top-2 right-4 gap-2 items-center'):
             ui.button(
@@ -128,6 +131,62 @@ def dashboard_header(moniker, member_type, user_id=None,
 
                 override_toggle.on_value_change(lambda: _save_override())
                 override_input.on('change', lambda e: _save_override())
+    return header
+
+
+_HEADER_BASE = ('text-black justify-start items-center bg-gradient-to-r'
+                ' from-[#f2d894] to-[#d6a5e2] pl-6'
+                ' transition-all duration-300 transform')
+_FOOTER_BASE = ('bg-[#8c52ff] flex justify-around items-center py-3'
+                ' transition-all duration-300 transform')
+
+
+def hide_dashboard_chrome(header, footer=None):
+    """Hide the dashboard header (and optionally footer).
+
+    Uses ``app.storage.user['_header_hidden']`` so repeated navigations
+    between hidden-header pages don't replay the slide-up animation.
+    """
+    was_hidden = app.storage.user.get('_header_hidden', False)
+    app.storage.user['_header_hidden'] = True
+
+    if was_hidden:
+        # Already hidden on previous page — build off-screen, no animation
+        header.classes(replace=f'{_HEADER_BASE} -translate-y-full')
+        header.visible = False
+        if footer:
+            footer.classes(replace=f'{_FOOTER_BASE} translate-y-full')
+            footer.visible = False
+    else:
+        # Was visible — animate off-screen
+        header.classes(replace=f'{_HEADER_BASE} -translate-y-full')
+        ui.timer(0.3, lambda: setattr(header, 'visible', False), once=True)
+        if footer:
+            footer.classes(replace=f'{_FOOTER_BASE} translate-y-full')
+            ui.timer(0.3, lambda: setattr(footer, 'visible', False), once=True)
+
+
+def show_dashboard_chrome(header, footer=None):
+    """Show the dashboard header (and optionally footer).
+
+    If the header was hidden on the previous page, animates it back in.
+    Otherwise it's already visible — no animation needed.
+    """
+    was_hidden = app.storage.user.get('_header_hidden', False)
+    app.storage.user['_header_hidden'] = False
+
+    if was_hidden:
+        # Was hidden — build off-screen, then animate in
+        header.classes(replace=f'{_HEADER_BASE} -translate-y-full')
+        header.visible = True
+        ui.timer(0.05, lambda: header.classes(
+            replace=f'{_HEADER_BASE} translate-y-0'), once=True)
+        if footer:
+            footer.classes(replace=f'{_FOOTER_BASE} translate-y-full')
+            footer.visible = True
+            ui.timer(0.05, lambda: footer.classes(
+                replace=f'{_FOOTER_BASE} translate-y-0'), once=True)
+    # else: header already built visible with translate-y-0 — nothing to do
 
 
 def _logout():
