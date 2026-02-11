@@ -258,7 +258,7 @@ async def build_linktree_fresh(user_id: str) -> dict:
         links=[dict(link) for link in links],
         colors=colors,
         avatar_cid=None,
-        card_design_cid=user.get('nfc_image_cid'),
+        card_design_cid=dict(user).get('nfc_image_cid'),
         settings=settings,
     )
 
@@ -286,7 +286,7 @@ async def republish_linktree(user_id: str) -> str | None:
         links=[dict(link) for link in links],
         colors=colors,
         avatar_cid=None,
-        card_design_cid=user.get('nfc_image_cid'),
+        card_design_cid=dict(user).get('nfc_image_cid'),
         settings=settings,
     )
 
@@ -294,7 +294,7 @@ async def republish_linktree(user_id: str) -> str | None:
         new_cid, _ = await publish_linktree(
             user['ipns_key_name'],
             linktree,
-            old_json_cid=user.get('linktree_cid'),
+            old_json_cid=dict(user).get('linktree_cid'),
         )
         await _db.update_user(user_id, linktree_cid=new_cid)
         return new_cid

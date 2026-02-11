@@ -617,25 +617,41 @@ async def linktree_page(ipns_name: str):
 
 @ui.page('/profile/{moniker_slug}')
 async def public_profile(moniker_slug: str):
-    """Legacy route — redirects to /lt/{ipns_name}."""
+    """Public profile route. Redirects to /lt/{ipns_name} when available,
+    or renders directly from DB for the owner when IPNS isn't set up."""
     import aiosqlite
     from config import DATABASE_PATH
 
     async with aiosqlite.connect(DATABASE_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
-            "SELECT ipns_name FROM users WHERE LOWER(REPLACE(moniker, ' ', '-')) = ?",
+            "SELECT id, ipns_name FROM users WHERE LOWER(REPLACE(moniker, ' ', '-')) = ?",
             (moniker_slug.lower(),)
         )
         user = await cursor.fetchone()
 
-    if not user or not user['ipns_name']:
+    if not user:
         style_page('Heavymeta Profile')
         with ui.column().classes('w-full items-center mt-24'):
             ui.label('Profile not found.').classes('text-2xl opacity-50')
         return
 
-    ui.navigate.to(f'/lt/{user["ipns_name"]}')
+    # If IPNS is available, redirect to the /lt/ route
+    if user['ipns_name']:
+        ui.navigate.to(f'/lt/{user["ipns_name"]}')
+        return
+
+    # Owner without IPNS — render directly from DB
+    is_owner = app.storage.user.get('user_id') == user['id']
+    if is_owner:
+        linktree = await ipfs_client.build_linktree_fresh(user['id'])
+        render_linktree(linktree, '')
+        return
+
+    # External visitor, no IPNS — can't render
+    style_page('Heavymeta Profile')
+    with ui.column().classes('w-full items-center mt-24'):
+        ui.label('Profile not yet published.').classes('text-2xl opacity-50')
 
 
 # ─── Launch Credentials ──────────────────────────────────────────────────────

@@ -82,7 +82,7 @@ def dashboard_header(moniker, member_type, user_id=None,
     ).style('position: relative;') as header:
         # Top-right icon buttons
         with ui.row().classes('absolute top-2 right-4 gap-2 items-center'):
-            preview_url = f'/lt/{ipns_name}' if ipns_name else f'/profile/{moniker_slug}'
+            preview_url = f'/profile/{moniker_slug}'
             ui.button(
                 'PREVIEW',
                 on_click=lambda: ui.navigate.to(preview_url),
