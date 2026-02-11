@@ -99,38 +99,39 @@ def dashboard_header(moniker, member_type, user_id=None,
                 'font-size: 18px;'
             )
 
-        ui.image('/static/placeholder.png').classes('w-[8vw] h-[8vw] rounded-full my-3 ml-6 shadow-md')
-        with ui.column().classes('gap-1 py-2'):
-            ui.label(moniker).classes('text-2xl font-bold')
-            badge_text = 'COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER'
-            with ui.element('div').classes(
-                'bg-[#ffde59] px-3 py-1 rounded-lg shadow-md'
-            ).style('display: inline-block; width: fit-content;'):
-                ui.label(badge_text).classes('text-xs font-bold')
+        with ui.row().classes('items-center gap-4 ml-6 my-2'):
+            ui.image('/static/placeholder.png').classes('w-[8vw] h-[8vw] rounded-full shadow-md')
+            with ui.column().classes('gap-1'):
+                ui.label(moniker).classes('text-2xl font-bold')
+                badge_text = 'COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER'
+                with ui.element('div').classes(
+                    'bg-[#ffde59] px-3 py-1 rounded-lg shadow-md'
+                ).style('display: inline-block; width: fit-content;'):
+                    ui.label(badge_text).classes('text-xs font-bold')
 
-            # Override linktree row
-            with ui.row().classes('items-center gap-2 mt-1'):
-                ui.image('/static/pintheon_logo.png').classes('w-5 h-5')
-                ui.label('override linktree').classes('text-xs opacity-70')
-                override_toggle = ui.switch('', value=bool(override_enabled)).props('dense')
-                override_input = ui.input(
-                    placeholder='https://your-site.com',
-                    value=override_url or '',
-                ).props('outlined dense').classes('text-xs').style('min-width: 200px;')
-                override_input.bind_visibility_from(override_toggle, 'value')
+                # Override linktree row
+                with ui.row().classes('items-center gap-2 mt-1'):
+                    ui.image('/static/pintheon_logo.png').classes('w-5 h-5')
+                    ui.label('override linktree').classes('text-xs opacity-70')
+                    override_toggle = ui.switch('', value=bool(override_enabled)).props('dense')
+                    override_input = ui.input(
+                        placeholder='https://your-site.com',
+                        value=override_url or '',
+                    ).props('outlined dense').classes('text-xs').style('min-width: 200px;')
+                    override_input.bind_visibility_from(override_toggle, 'value')
 
-            if user_id:
-                import db as _db
+                if user_id:
+                    import db as _db
 
-                async def _save_override():
-                    await _db.upsert_profile_settings(
-                        user_id,
-                        linktree_override=int(override_toggle.value),
-                        linktree_url=override_input.value.strip(),
-                    )
+                    async def _save_override():
+                        await _db.upsert_profile_settings(
+                            user_id,
+                            linktree_override=int(override_toggle.value),
+                            linktree_url=override_input.value.strip(),
+                        )
 
-                override_toggle.on_value_change(lambda: _save_override())
-                override_input.on('change', lambda e: _save_override())
+                    override_toggle.on_value_change(lambda: _save_override())
+                    override_input.on('change', lambda e: _save_override())
     return header
 
 
