@@ -16,6 +16,7 @@ from auth_dialog import open_auth_dialog
 from launch import generate_launch_credentials
 import ipfs_client
 from linktree_renderer import render_linktree
+from theme import apply_theme, load_and_apply_theme, resolve_active_palette
 import time as _time
 
 static_files_dir = os.path.join(os.path.dirname(__file__), 'static')
@@ -244,6 +245,7 @@ async def profile():
                               override_url=psettings['linktree_url'],
                               ipns_name=user['ipns_name'])
     show_dashboard_chrome(header)
+    await load_and_apply_theme(user_id)
 
     with ui.column().classes('w-full items-center gap-4 pb-24'):
         # Upgrade CTA for free users
@@ -388,6 +390,7 @@ async def card_editor():
                               override_url=psettings['linktree_url'],
                               ipns_name=user['ipns_name'])
     hide_dashboard_chrome(header)
+    await load_and_apply_theme(user_id)
 
     # Three.js import map + full-viewport CSS
     ui.add_head_html('''
@@ -479,6 +482,7 @@ async def card_case():
                               override_url=psettings['linktree_url'],
                               ipns_name=user['ipns_name'])
     hide_dashboard_chrome(header)
+    await load_and_apply_theme(user_id)
 
     with ui.column().classes('w-full items-center gap-4 pb-24'):
         with ui.column().classes('w-[75vw] gap-4'):
@@ -527,66 +531,136 @@ async def settings():
 
     colors = await db.get_profile_colors(user_id)
 
+    # Mutable state dict for all 12 colors + dark_mode
+    state = dict(colors)
+    state['dark_mode'] = bool(psettings.get('dark_mode', 0))
+
+    # Swatch labels and DB keys for each palette
+    _SWATCH_DEFS = [
+        ('Primary', 'accent_color'),
+        ('Secondary', 'link_color'),
+        ('Text', 'text_color'),
+        ('Background', 'bg_color'),
+        ('Card', 'card_color'),
+        ('Border', 'border_color'),
+    ]
+
     with ui.column().classes('w-full items-center gap-4 pb-24'):
         ui.button(icon='chevron_left', on_click=lambda: ui.navigate.back()).props(
             'flat round'
-        ).classes('self-start ml-4 mt-4 text-black opacity-70')
+        ).classes('self-start ml-4 mt-4 opacity-70')
         with ui.column().classes('w-[75vw] gap-6'):
-            ui.label('COLOR SETTINGS').classes('text-3xl font-bold')
-            ui.label('Customize the colors on your public profile.').classes('text-sm opacity-70')
+            ui.label('SETTINGS').classes('text-3xl font-bold')
+            ui.label('Customize your profile theme.').classes('text-sm opacity-70')
 
-            bg_input = ui.color_input('Background', value=colors['bg_color']).classes('w-full')
-            text_input = ui.color_input('Text', value=colors['text_color']).classes('w-full')
-            accent_input = ui.color_input('Accent', value=colors['accent_color']).classes('w-full')
-            link_input = ui.color_input('Links', value=colors['link_color']).classes('w-full')
-
-            # Live preview card
-            ui.label('PREVIEW').classes('text-lg font-bold mt-4')
-            preview = ui.card().classes('w-full p-6 rounded-lg gap-3')
+            # ── Live preview (above palettes) ──
+            ui.label('PREVIEW').classes('text-lg font-bold mt-2')
+            preview = ui.card().classes('w-full p-6 rounded-lg gap-3 preview-card')
             with preview:
                 preview_moniker = ui.label(moniker.upper()).classes('text-2xl font-bold')
                 with ui.element('div').classes('px-3 py-1 rounded-lg').style(
                     'display: inline-block; width: fit-content;'
                 ) as preview_badge:
-                    ui.label('COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER').classes('text-xs font-bold')
+                    preview_badge_label = ui.label(
+                        'COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER'
+                    ).classes('text-xs font-bold')
                 preview_link1 = ui.label('example-link.com').classes('font-semibold')
                 preview_link2 = ui.label('another-link.com').classes('font-semibold')
 
-            def update_preview():
-                bg = bg_input.value or '#ffffff'
-                txt = text_input.value or '#000000'
-                acc = accent_input.value or '#8c52ff'
-                lnk = link_input.value or '#8c52ff'
+            # ── Helper: build a palette column with 6 swatches ──
+            def build_palette(label, prefix, container):
+                """Build 6 color swatch buttons inside container.
+                prefix='' for light, prefix='dark_' for dark."""
+                with container:
+                    ui.label(label).classes('text-md font-medium opacity-70')
+                    with ui.row().classes('flex-wrap gap-3'):
+                        for swatch_label, base_key in _SWATCH_DEFS:
+                            key = f'{prefix}{base_key}' if prefix else base_key
+                            color_val = state.get(key, '#888888')
+                            with ui.column().classes('items-center gap-1'):
+                                btn = ui.button().props('flat unelevated').classes(
+                                    'w-10 h-10 min-w-0 p-0 rounded-lg'
+                                ).style(
+                                    f'background-color: {color_val} !important;'
+                                    'border: 1px solid rgba(128,128,128,0.3);'
+                                )
+
+                                def make_handler(k, b):
+                                    def on_pick(e):
+                                        b.style(
+                                            f'background-color: {e.color} !important;'
+                                            'border: 1px solid rgba(128,128,128,0.3);'
+                                        )
+                                        state[k] = e.color
+                                        apply_live_theme()
+                                    return on_pick
+
+                                with btn:
+                                    ui.color_picker(
+                                        on_pick=make_handler(key, btn)
+                                    ).props('no-header no-footer')
+
+                                ui.label(swatch_label).classes(
+                                    'text-[10px] opacity-50'
+                                )
+
+            # ── Toggle + both palettes in one row ──
+            with ui.row().classes('w-full items-start gap-4'):
+                with ui.column().classes('items-center gap-1 pt-4'):
+                    ui.label('LIGHT').classes('text-xs font-bold opacity-70')
+                    mode_toggle = ui.switch('', value=state['dark_mode']).props('dense')
+                    ui.label('DARK').classes('text-xs font-bold opacity-70')
+                light_col = ui.column().classes('flex-1 gap-2 preview-card p-3 rounded-lg')
+                dark_col = ui.column().classes('flex-1 gap-2 preview-card p-3 rounded-lg')
+
+            build_palette('light', '', light_col)
+            build_palette('dark', 'dark_', dark_col)
+
+            def apply_live_theme():
+                """Update preview card + entire app UI."""
+                p = 'dark_' if mode_toggle.value else ''
+                bg = state.get(f'{p}bg_color', '#ffffff')
+                txt = state.get(f'{p}text_color', '#000000')
+                acc = state.get(f'{p}accent_color', '#8c52ff')
+                lnk = state.get(f'{p}link_color', '#f2d894')
+                card_c = state.get(f'{p}card_color', '#f5f5f5')
+                border_c = state.get(f'{p}border_color', '#e0e0e0')
+                # Update preview card
                 preview.style(f'background-color: {bg};')
                 preview_moniker.style(f'color: {txt};')
                 preview_badge.style(
                     f'background-color: {acc}40; display: inline-block; width: fit-content;'
                 )
+                preview_badge_label.style(f'color: {txt};')
                 preview_link1.style(f'color: {lnk};')
                 preview_link2.style(f'color: {lnk};')
+                # Update entire app UI
+                apply_theme(
+                    primary=acc, secondary=lnk, text=txt,
+                    bg=bg, card=card_c, border=border_c,
+                )
 
-            update_preview()
-            bg_input.on_value_change(lambda: update_preview())
-            text_input.on_value_change(lambda: update_preview())
-            accent_input.on_value_change(lambda: update_preview())
-            link_input.on_value_change(lambda: update_preview())
+            apply_live_theme()
+            mode_toggle.on_value_change(lambda: apply_live_theme())
 
-            save_label = ui.label('').classes('text-green-600 text-sm')
+            # ── Save ──
+            save_label = ui.label('').classes('text-sm')
             save_label.set_visibility(False)
 
-            async def save_colors():
-                await db.upsert_profile_colors(
+            async def save_settings():
+                color_kwargs = {k: state[k] for k in db._COLOR_COLS}
+                await db.upsert_profile_colors(user_id, **color_kwargs)
+                await db.upsert_profile_settings(
                     user_id,
-                    bg_color=bg_input.value or '#ffffff',
-                    text_color=text_input.value or '#000000',
-                    accent_color=accent_input.value or '#8c52ff',
-                    link_color=link_input.value or '#8c52ff',
+                    linktree_override=psettings['linktree_override'],
+                    linktree_url=psettings['linktree_url'],
+                    dark_mode=int(mode_toggle.value),
                 )
                 ipfs_client.schedule_republish(user_id)
-                save_label.text = 'Colors saved!'
+                save_label.text = 'Settings saved!'
                 save_label.set_visibility(True)
 
-            ui.button('SAVE', on_click=save_colors).classes('mt-4 px-8 py-3 text-lg')
+            ui.button('SAVE', on_click=save_settings).classes('mt-4 px-8 py-3 text-lg')
 
     dashboard_nav()
 
@@ -668,6 +742,7 @@ async def launch():
 
     user_id = app.storage.user.get('user_id')
     user = await db.get_user_by_id(user_id)
+    await load_and_apply_theme(user_id)
 
     with ui.column(
     ).classes('w-full items-center gap-8 mt-12'

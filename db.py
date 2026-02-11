@@ -28,17 +28,26 @@ CREATE TABLE IF NOT EXISTS link_tree (
 );
 
 CREATE TABLE IF NOT EXISTS profile_colors (
-    user_id      TEXT PRIMARY KEY REFERENCES users(id),
-    bg_color     TEXT DEFAULT '#ffffff',
-    text_color   TEXT DEFAULT '#000000',
-    accent_color TEXT DEFAULT '#8c52ff',
-    link_color   TEXT DEFAULT '#8c52ff'
+    user_id           TEXT PRIMARY KEY REFERENCES users(id),
+    bg_color          TEXT DEFAULT '#ffffff',
+    text_color        TEXT DEFAULT '#000000',
+    accent_color      TEXT DEFAULT '#8c52ff',
+    link_color        TEXT DEFAULT '#f2d894',
+    card_color        TEXT DEFAULT '#f5f5f5',
+    border_color      TEXT DEFAULT '#e0e0e0',
+    dark_bg_color     TEXT DEFAULT '#1a1a1a',
+    dark_text_color   TEXT DEFAULT '#f0f0f0',
+    dark_accent_color TEXT DEFAULT '#a87aff',
+    dark_link_color   TEXT DEFAULT '#d4a843',
+    dark_card_color   TEXT DEFAULT '#2a2a2a',
+    dark_border_color TEXT DEFAULT '#444444'
 );
 
 CREATE TABLE IF NOT EXISTS profile_settings (
     user_id           TEXT PRIMARY KEY REFERENCES users(id),
     linktree_override INTEGER DEFAULT 0,
-    linktree_url      TEXT DEFAULT ''
+    linktree_url      TEXT DEFAULT '',
+    dark_mode         INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS payments (
@@ -61,13 +70,24 @@ async def init_db():
         await conn.executescript(SCHEMA)
         await conn.commit()
 
-        # Migrations — add IPNS columns (idempotent)
+        # Migrations — idempotent column additions
         migrations = [
             "ALTER TABLE users ADD COLUMN ipns_key_name TEXT",
             "ALTER TABLE users ADD COLUMN ipns_name TEXT",
             "ALTER TABLE users ADD COLUMN linktree_cid TEXT",
             "ALTER TABLE users ADD COLUMN ipns_key_backup TEXT",
             "ALTER TABLE users ADD COLUMN nfc_back_image_cid TEXT",
+            # Color columns for dark/light palettes
+            "ALTER TABLE profile_colors ADD COLUMN card_color TEXT DEFAULT '#f5f5f5'",
+            "ALTER TABLE profile_colors ADD COLUMN border_color TEXT DEFAULT '#e0e0e0'",
+            "ALTER TABLE profile_colors ADD COLUMN dark_bg_color TEXT DEFAULT '#1a1a1a'",
+            "ALTER TABLE profile_colors ADD COLUMN dark_text_color TEXT DEFAULT '#f0f0f0'",
+            "ALTER TABLE profile_colors ADD COLUMN dark_accent_color TEXT DEFAULT '#a87aff'",
+            "ALTER TABLE profile_colors ADD COLUMN dark_link_color TEXT DEFAULT '#d4a843'",
+            "ALTER TABLE profile_colors ADD COLUMN dark_card_color TEXT DEFAULT '#2a2a2a'",
+            "ALTER TABLE profile_colors ADD COLUMN dark_border_color TEXT DEFAULT '#444444'",
+            # Dark mode preference
+            "ALTER TABLE profile_settings ADD COLUMN dark_mode INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try:
@@ -222,8 +242,18 @@ _COLOR_DEFAULTS = {
     'bg_color': '#ffffff',
     'text_color': '#000000',
     'accent_color': '#8c52ff',
-    'link_color': '#8c52ff',
+    'link_color': '#f2d894',
+    'card_color': '#f5f5f5',
+    'border_color': '#e0e0e0',
+    'dark_bg_color': '#1a1a1a',
+    'dark_text_color': '#f0f0f0',
+    'dark_accent_color': '#a87aff',
+    'dark_link_color': '#d4a843',
+    'dark_card_color': '#2a2a2a',
+    'dark_border_color': '#444444',
 }
+
+_COLOR_COLS = list(_COLOR_DEFAULTS.keys())
 
 
 async def get_profile_colors(user_id):
@@ -234,21 +264,22 @@ async def get_profile_colors(user_id):
         )
         row = await cursor.fetchone()
     if row:
-        return {k: row[k] for k in _COLOR_DEFAULTS}
+        d = dict(row)
+        return {k: d.get(k, _COLOR_DEFAULTS[k]) for k in _COLOR_DEFAULTS}
     return dict(_COLOR_DEFAULTS)
 
 
-async def upsert_profile_colors(user_id, bg_color, text_color, accent_color, link_color):
+async def upsert_profile_colors(user_id, **colors):
+    vals = {k: colors.get(k, _COLOR_DEFAULTS[k]) for k in _COLOR_COLS}
+    cols = ', '.join(_COLOR_COLS)
+    placeholders = ', '.join(['?'] * (1 + len(_COLOR_COLS)))
+    updates = ', '.join(f'{c} = excluded.{c}' for c in _COLOR_COLS)
     async with aiosqlite.connect(DATABASE_PATH) as conn:
         await conn.execute(
-            """INSERT INTO profile_colors (user_id, bg_color, text_color, accent_color, link_color)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(user_id) DO UPDATE SET
-                   bg_color = excluded.bg_color,
-                   text_color = excluded.text_color,
-                   accent_color = excluded.accent_color,
-                   link_color = excluded.link_color""",
-            (user_id, bg_color, text_color, accent_color, link_color),
+            f"""INSERT INTO profile_colors (user_id, {cols})
+               VALUES ({placeholders})
+               ON CONFLICT(user_id) DO UPDATE SET {updates}""",
+            (user_id, *[vals[c] for c in _COLOR_COLS]),
         )
         await conn.commit()
 
@@ -258,6 +289,7 @@ async def upsert_profile_colors(user_id, bg_color, text_color, accent_color, lin
 _SETTINGS_DEFAULTS = {
     'linktree_override': 0,
     'linktree_url': '',
+    'dark_mode': 0,
 }
 
 
@@ -269,18 +301,22 @@ async def get_profile_settings(user_id):
         )
         row = await cursor.fetchone()
     if row:
-        return {k: row[k] for k in _SETTINGS_DEFAULTS}
+        d = dict(row)
+        return {k: d.get(k, _SETTINGS_DEFAULTS[k]) for k in _SETTINGS_DEFAULTS}
     return dict(_SETTINGS_DEFAULTS)
 
 
-async def upsert_profile_settings(user_id, linktree_override, linktree_url):
+async def upsert_profile_settings(user_id, linktree_override, linktree_url,
+                                   dark_mode=None):
     async with aiosqlite.connect(DATABASE_PATH) as conn:
         await conn.execute(
-            """INSERT INTO profile_settings (user_id, linktree_override, linktree_url)
-               VALUES (?, ?, ?)
+            """INSERT INTO profile_settings (user_id, linktree_override, linktree_url, dark_mode)
+               VALUES (?, ?, ?, ?)
                ON CONFLICT(user_id) DO UPDATE SET
                    linktree_override = excluded.linktree_override,
-                   linktree_url = excluded.linktree_url""",
-            (user_id, int(linktree_override), linktree_url),
+                   linktree_url = excluded.linktree_url,
+                   dark_mode = excluded.dark_mode""",
+            (user_id, int(linktree_override), linktree_url,
+             int(dark_mode) if dark_mode is not None else 0),
         )
         await conn.commit()

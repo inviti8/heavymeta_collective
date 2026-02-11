@@ -6,11 +6,13 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
     ui.page_title('Heavymeta Profile')
 
     moniker = linktree.get('moniker', 'Unknown')
-    colors = linktree.get('colors', {}).get('light', {})
+    dark_mode = linktree.get('dark_mode', False)
+    palette_key = 'dark' if dark_mode else 'light'
+    colors = linktree.get('colors', {}).get(palette_key, {})
     bg = colors.get('bg', '#ffffff')
     txt = colors.get('text', '#000000')
     acc = colors.get('primary', '#8c52ff')
-    lnk = colors.get('secondary', '#8c52ff')
+    lnk = colors.get('secondary', '#f2d894')
     avatar_cid = linktree.get('avatar_cid')
     links = linktree.get('links', [])
     wallets = linktree.get('wallets', [])

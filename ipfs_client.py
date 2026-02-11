@@ -165,39 +165,45 @@ def build_linktree_json(*, moniker, member_type, stellar_address=None,
                         settings=None):
     """Assemble schema v1 linktree JSON from current data.
 
-    Bridges Phase 2→3 by producing the canonical JSON structure
-    from existing SQLite data or enrollment defaults.
-
     Args:
         moniker: User display name.
         member_type: 'free' or 'coop'.
         stellar_address: Stellar public key (coop members).
         links: List of link dicts with label, url, icon_cid, sort_order.
-        colors: Dict with 'light' and 'dark' sub-dicts, or legacy
-                profile_colors dict (bg_color, text_color, etc.).
+        colors: Dict with 'light' and 'dark' sub-dicts, or DB
+                profile_colors dict (bg_color, dark_bg_color, etc.).
         avatar_cid: IPFS CID for profile image.
         card_design_cid: IPFS CID for NFC card image.
         override_url: External URL redirect (empty = disabled).
-        settings: Legacy profile_settings dict.
+        settings: profile_settings dict (linktree_override, dark_mode, etc.).
     """
-    # Normalize colors from legacy format if needed
+    # Normalize colors from DB format or pass-through
     if colors and "light" in colors:
         color_obj = colors
     elif colors:
-        # Legacy profile_colors → new schema mapping
         color_obj = {
             "light": {
                 "primary": colors.get("accent_color", _DEFAULT_COLORS["light"]["primary"]),
                 "secondary": colors.get("link_color", _DEFAULT_COLORS["light"]["secondary"]),
                 "text": colors.get("text_color", _DEFAULT_COLORS["light"]["text"]),
                 "bg": colors.get("bg_color", _DEFAULT_COLORS["light"]["bg"]),
-                "card": _DEFAULT_COLORS["light"]["card"],
-                "border": _DEFAULT_COLORS["light"]["border"],
+                "card": colors.get("card_color", _DEFAULT_COLORS["light"]["card"]),
+                "border": colors.get("border_color", _DEFAULT_COLORS["light"]["border"]),
             },
-            "dark": dict(_DEFAULT_COLORS["dark"]),
+            "dark": {
+                "primary": colors.get("dark_accent_color", _DEFAULT_COLORS["dark"]["primary"]),
+                "secondary": colors.get("dark_link_color", _DEFAULT_COLORS["dark"]["secondary"]),
+                "text": colors.get("dark_text_color", _DEFAULT_COLORS["dark"]["text"]),
+                "bg": colors.get("dark_bg_color", _DEFAULT_COLORS["dark"]["bg"]),
+                "card": colors.get("dark_card_color", _DEFAULT_COLORS["dark"]["card"]),
+                "border": colors.get("dark_border_color", _DEFAULT_COLORS["dark"]["border"]),
+            },
         }
     else:
         color_obj = dict(_DEFAULT_COLORS)
+
+    # Resolve dark_mode from settings
+    dark_mode = bool(settings.get("dark_mode", 0)) if settings else False
 
     # Build links array
     link_list = []
@@ -223,7 +229,7 @@ def build_linktree_json(*, moniker, member_type, stellar_address=None,
         "moniker": moniker,
         "member_type": member_type,
         "avatar_cid": avatar_cid,
-        "dark_mode": None,
+        "dark_mode": dark_mode,
         "colors": color_obj,
         "links": link_list,
         "wallets": wallets,
