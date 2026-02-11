@@ -390,7 +390,6 @@ async def card_editor():
                               override_url=psettings['linktree_url'],
                               ipns_name=user['ipns_name'])
     hide_dashboard_chrome(header)
-    await load_and_apply_theme(user_id)
 
     # Three.js import map + full-viewport CSS
     ui.add_head_html('''
@@ -402,6 +401,7 @@ async def card_editor():
     </script>
     <style>
       .q-page-container { padding-top: 0 !important; }
+      .q-page, body { background-color: transparent !important; }
       .q-layout { pointer-events: none; }
       .q-footer { pointer-events: auto; }
       #card-scene { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 500; }
@@ -482,7 +482,6 @@ async def card_case():
                               override_url=psettings['linktree_url'],
                               ipns_name=user['ipns_name'])
     hide_dashboard_chrome(header)
-    await load_and_apply_theme(user_id)
 
     with ui.column().classes('w-full items-center gap-4 pb-24'):
         with ui.column().classes('w-[75vw] gap-4'):

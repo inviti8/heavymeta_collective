@@ -13,6 +13,8 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
     txt = colors.get('text', '#000000')
     acc = colors.get('primary', '#8c52ff')
     lnk = colors.get('secondary', '#f2d894')
+    card_bg = colors.get('card', '#f5f5f5')
+    bdr = colors.get('border', '#e0e0e0')
     avatar_cid = linktree.get('avatar_cid')
     links = linktree.get('links', [])
     wallets = linktree.get('wallets', [])
@@ -29,7 +31,7 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
 
     with ui.column().classes(
         'w-full items-center py-8'
-    ).style(f'background: linear-gradient(to right, #f2d894, {acc}40);'):
+    ).style(f'background: linear-gradient(to right, {acc}, {lnk});'):
         ui.image(avatar_url).classes('w-32 h-32 rounded-full shadow-md')
         ui.label(moniker).classes('text-3xl font-bold mt-4').style(f'color: {txt};')
 
@@ -47,22 +49,26 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
         'padding-inline: clamp(1rem, 25vw, 50rem);'
     ):
         if links:
-            with ui.column().classes('w-full gap-2 border p-4 rounded-lg'):
+            with ui.column().classes('w-full gap-2 p-4 rounded-lg').style(
+                f'border: 1px solid {bdr};'
+            ):
                 ui.label('LINKS').classes('text-lg font-bold').style(f'color: {txt};')
                 for link in sorted(links, key=lambda l: l.get('sort_order', 0)):
                     icon_url = (f'{KUBO_GATEWAY}/ipfs/{link["icon_cid"]}'
                                 if link.get('icon_cid')
                                 else '/static/placeholder.png')
                     with ui.row().classes(
-                        'items-center border py-2 px-4 rounded-full w-full'
-                    ):
+                        'items-center py-2 px-4 rounded-full w-full'
+                    ).style(f'border: 1px solid {bdr};'):
                         ui.image(icon_url).classes('rounded-full w-8 h-8')
                         ui.link(
                             link['label'], link['url'], new_tab=True
                         ).classes('font-semibold text-lg').style(f'color: {lnk};')
 
         if wallets:
-            with ui.column().classes('w-full gap-2 border p-4 rounded-lg'):
+            with ui.column().classes('w-full gap-2 p-4 rounded-lg').style(
+                f'border: 1px solid {bdr};'
+            ):
                 ui.label('WALLETS').classes('text-lg font-bold').style(f'color: {txt};')
                 for wallet in wallets:
                     with ui.row().classes('items-center gap-2 w-full'):
@@ -80,7 +86,9 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
                                 ),
                         ).props('flat dense size=sm')
 
-    with ui.footer().classes('bg-[#8c52ff] flex justify-center items-center py-3'):
+    with ui.footer().classes('flex justify-center items-center py-3').style(
+        f'background-color: {acc};'
+    ):
         ui.button(
             icon='arrow_back', on_click=lambda: ui.navigate.to('/')
         ).props('flat round').style('color: white;')
