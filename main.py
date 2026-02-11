@@ -3,7 +3,7 @@ import db
 from nicegui import ui, app
 from fastapi import Request, HTTPException
 import os
-from components import style_page, form_field, image_with_text
+from components import style_page, form_field, image_with_text, dashboard_nav, dashboard_header
 from auth import (
     validate_signup_form, login_user, set_session, require_auth, require_coop,
     hash_password,
@@ -253,16 +253,6 @@ def pay_xlm():
             status_label = ui.label('Waiting for payment...').classes('text-sm opacity-70')
             spinner = ui.spinner('dots', size='lg')
 
-        # Success section (hidden until payment confirmed)
-        with ui.card().classes('w-full items-center p-6 gap-4') as success_card:
-            ui.label('Payment confirmed!').classes('text-2xl font-bold text-green-600')
-            tx_link = ui.link('', '', new_tab=True).classes('text-sm text-primary')
-            ui.button(
-                'CONTINUE TO YOUR PROFILE',
-                on_click=lambda: ui.navigate.to('/join/success'),
-            ).classes('mt-4 px-8 py-3 text-lg')
-        success_card.set_visibility(False)
-
         # Poll for payment
         async def check_and_update():
             result = check_payment(pending['memo'])
@@ -283,19 +273,11 @@ def pay_xlm():
                         tx_hash=result['hash'],
                         xlm_price_usd=xlm_price,
                     )
-                    # Auto-login
+                    # Auto-login and redirect to dashboard
                     user = await db.get_user_by_id(user_id)
                     set_session(dict(user))
-                    app.storage.user['enrollment_success'] = {
-                        'stellar_address': stellar_address,
-                        'tx_url': result.get('url', ''),
-                    }
-                    # Clear pending signup
                     del app.storage.user['pending_signup']
-
-                    tx_link.text = f'Transaction: {result["hash"][:12]}...'
-                    tx_link._props['href'] = result.get('url', '#')
-                    success_card.set_visibility(True)
+                    ui.navigate.to('/profile/edit')
                 except Exception as e:
                     status_label.text = f'Payment received but enrollment failed: {e}'
 
@@ -306,35 +288,37 @@ def pay_xlm():
 
 @ui.page('/join/success')
 async def join_success():
+    """Stripe redirects here after checkout. Webhook may have already completed enrollment."""
+    # If already logged in as coop, go straight to dashboard
+    if app.storage.user.get('authenticated') and app.storage.user.get('member_type') == 'coop':
+        ui.navigate.to('/profile/edit')
+        return
+
+    # Webhook may still be processing — poll until user is upgraded
+    user_id = app.storage.user.get('user_id')
+
     style_page('Welcome!')
-
-    success_data = app.storage.user.get('enrollment_success', {})
-    stellar_address = success_data.get('stellar_address', '')
-    tx_url = success_data.get('tx_url', '')
-
-    # If coming from Stripe, check session
-    # (Stripe redirects here after successful payment; webhook handles enrollment)
 
     with ui.column(
     ).classes('w-full items-center gap-8 mt-12'
     ).style('padding-inline: clamp(1rem, 25vw, 50rem);'):
-        ui.label('WELCOME TO THE COLLECTIVE').classes('text-4xl font-semibold tracking-wide')
-        ui.label('Your membership is confirmed.').classes('text-lg opacity-70')
+        ui.label('FINALIZING YOUR MEMBERSHIP...').classes('text-3xl font-semibold tracking-wide')
+        spinner = ui.spinner('dots', size='lg')
+        status_label = ui.label('Waiting for payment confirmation...').classes('text-sm opacity-70')
 
-        if stellar_address:
-            with ui.card().classes('w-full p-6 gap-2'):
-                ui.label(f'Node Address: {stellar_address}').classes('text-sm font-mono break-all')
-                ui.label(f'Network: {config.NET}').classes('text-sm')
-                ui.label('Funded: 22 XLM').classes('text-sm')
-                if tx_url:
-                    ui.link('View transaction', tx_url, new_tab=True).classes('text-sm text-primary')
+    async def check_enrollment():
+        if not user_id:
+            status_label.text = 'Session expired. Please log in.'
+            spinner.set_visibility(False)
+            timer.deactivate()
+            return
+        user = await db.get_user_by_id(user_id)
+        if user and user['member_type'] == 'coop':
+            timer.deactivate()
+            set_session(dict(user))
+            ui.navigate.to('/profile/edit')
 
-        ui.label('A welcome email has been sent to your inbox.').classes('text-sm opacity-70')
-
-        ui.button(
-            'GO TO YOUR PROFILE',
-            on_click=lambda: ui.navigate.to('/profile/edit'),
-        ).classes('mt-4 px-8 py-3 text-lg')
+    timer = ui.timer(3.0, check_enrollment)
 
 
 # ─── Login ────────────────────────────────────────────────────────────────────
@@ -381,7 +365,7 @@ def login():
         ).classes('mt-8 px-8 py-3 text-lg w-1/2')
 
 
-# ─── Profile ─────────────────────────────────────────────────────────────────
+# ─── Dashboard (Profile) ─────────────────────────────────────────────────────
 
 @ui.page('/profile/edit')
 async def profile():
@@ -393,29 +377,9 @@ async def profile():
     moniker = user['moniker'] if user else app.storage.user.get('moniker', 'Unknown')
     member_type = app.storage.user.get('member_type', 'free')
 
-    with ui.header(
-    ).classes(
-        'text-black justify-center items-center bg-gradient-to-r from-[#f2d894] to-[#d6a5e2]'
-    ):
-        ui.image('/static/placeholder.png').classes('w-[20vw] h-[20vw] rounded-full m-8 shadow-md')
-        with ui.column().classes('h-50 flex justify-between w-[50vw]'):
-            with ui.column():
-                ui.label(moniker.upper()).classes('text-5xl font-medium font-bold')
-                badge_text = 'COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER'
-                with ui.element('div').classes(
-                    'bg-[#ffde59] px-4 py-2 rounded-lg shadow-md'
-                ).style('display: inline-block; width: fit-content;'):
-                    ui.label(badge_text).classes('text-sm font-bold')
+    dashboard_header(moniker, member_type, user['stellar_address'] if user else None)
 
-            if user and user['stellar_address']:
-                with ui.row().classes('items-center gap-1'):
-                    ui.icon('chevron_right').classes('text-lg')
-                    addr = user['stellar_address']
-                    short = f"{addr[:6]}...{addr[-4:]}"
-                    explorer_url = f"{config.BLOCK_EXPLORER}/account/{addr}"
-                    ui.link(short, explorer_url, new_tab=True).classes('text-[#8c52ff] font-semibold text-lg')
-
-    with ui.column().classes('w-full items-center gap-8 mt-12'):
+    with ui.column().classes('w-full items-center gap-8 mt-12 pb-24'):
         # Upgrade CTA for free users
         if member_type == 'free':
             with ui.card().classes('w-[45vw] bg-gradient-to-r from-purple-100 to-yellow-100'):
@@ -513,8 +477,239 @@ async def profile():
             with ui.column().classes('w-[45vw] gap-1 border p-4 rounded-lg'):
                 ui.label('WALLETS').classes('text-2xl font-bold')
                 if user and user['stellar_address']:
-                    ui.label(f"Stellar: {user['stellar_address']}").classes('text-sm font-mono break-all')
-                    ui.label(f"Network: {config.NET}").classes('text-sm opacity-70')
+                    with ui.row().classes('items-center gap-2 w-full'):
+                        ui.image('/static/placeholder.png').classes('rounded-full w-8 h-8')
+                        ui.label(f"{user['stellar_address']}").classes('text-sm font-mono break-all flex-1')
+
+    dashboard_nav(active='dashboard')
+
+
+# ─── Card Editor (shell) ────────────────────────────────────────────────────
+
+@ui.page('/card/editor')
+async def card_editor():
+    if not require_auth():
+        return
+
+    user_id = app.storage.user.get('user_id')
+    user = await db.get_user_by_id(user_id)
+    moniker = user['moniker'] if user else app.storage.user.get('moniker', 'Unknown')
+    member_type = app.storage.user.get('member_type', 'free')
+
+    dashboard_header(moniker, member_type, user['stellar_address'] if user else None)
+
+    with ui.column().classes('w-full items-center gap-8 mt-12 pb-24'):
+        with ui.column().classes('w-[45vw] gap-4'):
+            # Editor tabs
+            with ui.row().classes('gap-2'):
+                ui.button('PREVIEW', on_click=lambda: None).classes('px-4 py-1')
+                ui.button('CODE', on_click=lambda: None).props('outline').classes('px-4 py-1')
+                ui.space()
+                ui.button('DELETE', on_click=lambda: None).props('flat color=red').classes('px-4 py-1')
+
+            # Card preview area
+            with ui.card().classes('w-full aspect-video'):
+                ui.image('/static/placeholder.png').classes('w-full h-full').props('fit=cover')
+
+            # Placeholder controls
+            with ui.card().classes('w-full p-4 gap-2'):
+                ui.label('CARD DESIGN').classes('text-lg font-bold')
+                ui.label('Upload an image or edit the HTML for your NFC card.').classes('text-sm opacity-70')
+                ui.button('UPLOAD IMAGE', on_click=lambda: None).classes('mt-2')
+
+    dashboard_nav(active='card_editor')
+
+
+# ─── Card Case (shell) ──────────────────────────────────────────────────────
+
+@ui.page('/card/case')
+async def card_case():
+    if not require_auth():
+        return
+
+    user_id = app.storage.user.get('user_id')
+    user = await db.get_user_by_id(user_id)
+    moniker = user['moniker'] if user else app.storage.user.get('moniker', 'Unknown')
+    member_type = app.storage.user.get('member_type', 'free')
+
+    dashboard_header(moniker, member_type, user['stellar_address'] if user else None)
+
+    with ui.column().classes('w-full items-center gap-8 mt-12 pb-24'):
+        with ui.column().classes('w-[45vw] gap-4'):
+            ui.label('CARD CASE').classes('text-3xl font-bold')
+            ui.label('Collect virtual cards from other Heavymeta members.').classes('text-sm opacity-70')
+
+            # Placeholder cards (Apple Wallet style stack)
+            for i in range(3):
+                with ui.card().classes(
+                    'w-full rounded-2xl overflow-hidden shadow-lg'
+                ).style('margin-top: -2rem;' if i > 0 else ''):
+                    with ui.row().classes('bg-gradient-to-r from-[#f2d894] to-[#d6a5e2] p-4 items-center gap-4'):
+                        ui.image('/static/placeholder.png').classes('w-12 h-12 rounded-full')
+                        with ui.column().classes('gap-0'):
+                            ui.label(f'Member {i + 1}').classes('text-lg font-bold text-black')
+                            ui.label('heavymeta.art').classes('text-xs opacity-50 text-black')
+                    with ui.row().classes('p-3 gap-2'):
+                        ui.icon('link').classes('text-sm opacity-50')
+                        ui.label('3 links').classes('text-xs opacity-50')
+
+            if True:  # empty state hint
+                ui.separator().classes('my-4')
+                ui.label('Tap a member\'s NFC card to add it here.').classes('text-sm opacity-50 text-center w-full')
+
+    dashboard_nav(active='card_case')
+
+
+# ─── Settings (Color Customization) ────────────────────────────────────────
+
+@ui.page('/settings')
+async def settings():
+    if not require_auth():
+        return
+
+    user_id = app.storage.user.get('user_id')
+    user = await db.get_user_by_id(user_id)
+    moniker = user['moniker'] if user else app.storage.user.get('moniker', 'Unknown')
+    member_type = app.storage.user.get('member_type', 'free')
+
+    dashboard_header(moniker, member_type, user['stellar_address'] if user else None)
+
+    colors = await db.get_profile_colors(user_id)
+
+    with ui.column().classes('w-full items-center gap-8 mt-12 pb-24'):
+        with ui.column().classes('w-[45vw] gap-6'):
+            ui.label('COLOR SETTINGS').classes('text-3xl font-bold')
+            ui.label('Customize the colors on your public profile.').classes('text-sm opacity-70')
+
+            bg_input = ui.color_input('Background', value=colors['bg_color']).classes('w-full')
+            text_input = ui.color_input('Text', value=colors['text_color']).classes('w-full')
+            accent_input = ui.color_input('Accent', value=colors['accent_color']).classes('w-full')
+            link_input = ui.color_input('Links', value=colors['link_color']).classes('w-full')
+
+            # Live preview card
+            ui.label('PREVIEW').classes('text-lg font-bold mt-4')
+            preview = ui.card().classes('w-full p-6 rounded-lg gap-3')
+            with preview:
+                preview_moniker = ui.label(moniker.upper()).classes('text-2xl font-bold')
+                with ui.element('div').classes('px-3 py-1 rounded-lg').style(
+                    'display: inline-block; width: fit-content;'
+                ) as preview_badge:
+                    ui.label('COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER').classes('text-xs font-bold')
+                preview_link1 = ui.label('example-link.com').classes('font-semibold')
+                preview_link2 = ui.label('another-link.com').classes('font-semibold')
+
+            def update_preview():
+                bg = bg_input.value or '#ffffff'
+                txt = text_input.value or '#000000'
+                acc = accent_input.value or '#8c52ff'
+                lnk = link_input.value or '#8c52ff'
+                preview.style(f'background-color: {bg};')
+                preview_moniker.style(f'color: {txt};')
+                preview_badge.style(
+                    f'background-color: {acc}40; display: inline-block; width: fit-content;'
+                )
+                preview_link1.style(f'color: {lnk};')
+                preview_link2.style(f'color: {lnk};')
+
+            update_preview()
+            bg_input.on_value_change(lambda: update_preview())
+            text_input.on_value_change(lambda: update_preview())
+            accent_input.on_value_change(lambda: update_preview())
+            link_input.on_value_change(lambda: update_preview())
+
+            save_label = ui.label('').classes('text-green-600 text-sm')
+            save_label.set_visibility(False)
+
+            async def save_colors():
+                await db.upsert_profile_colors(
+                    user_id,
+                    bg_color=bg_input.value or '#ffffff',
+                    text_color=text_input.value or '#000000',
+                    accent_color=accent_input.value or '#8c52ff',
+                    link_color=link_input.value or '#8c52ff',
+                )
+                save_label.text = 'Colors saved!'
+                save_label.set_visibility(True)
+
+            ui.button('SAVE', on_click=save_colors).classes('mt-4 px-8 py-3 text-lg')
+
+    dashboard_nav()
+
+
+# ─── Public Profile (Client View) ───────────────────────────────────────────
+
+@ui.page('/profile/{moniker_slug}')
+async def public_profile(moniker_slug: str):
+    style_page('Heavymeta Profile')
+
+    # Look up user by moniker
+    import aiosqlite
+    from config import DATABASE_PATH, BLOCK_EXPLORER, NET
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM users WHERE LOWER(REPLACE(moniker, ' ', '-')) = ?",
+            (moniker_slug.lower(),)
+        )
+        user = await cursor.fetchone()
+
+    if not user:
+        with ui.column().classes('w-full items-center mt-24'):
+            ui.label('Profile not found.').classes('text-2xl opacity-50')
+        return
+
+    # Load custom colors
+    colors = await db.get_profile_colors(user['id'])
+    bg = colors['bg_color']
+    txt = colors['text_color']
+    acc = colors['accent_color']
+    lnk = colors['link_color']
+
+    # Apply background color
+    ui.query('body').style(f'background-color: {bg};')
+
+    # Client View header — blend accent into gradient end-color
+    with ui.column().classes(
+        'w-full items-center py-8'
+    ).style(f'background: linear-gradient(to right, #f2d894, {acc}40);'):
+        ui.image('/static/placeholder.png').classes('w-32 h-32 rounded-full shadow-md')
+        ui.label(user['moniker']).classes('text-3xl font-bold mt-4').style(f'color: {txt};')
+        if user['stellar_address']:
+            addr = user['stellar_address']
+            short = f"{addr[:6]}...{addr[-4:]}"
+            ui.link(short, f'{BLOCK_EXPLORER}/account/{addr}', new_tab=True).classes(
+                'font-semibold text-sm'
+            ).style(f'color: {lnk};')
+
+    with ui.column().classes('w-full items-center gap-8 mt-8').style(
+        'padding-inline: clamp(1rem, 25vw, 50rem);'
+    ):
+        # Links
+        links = await db.get_links(user['id'])
+        if links:
+            with ui.column().classes('w-full gap-2 border p-4 rounded-lg'):
+                ui.label('LINKS').classes('text-lg font-bold').style(f'color: {txt};')
+                for link in links:
+                    with ui.row().classes('items-center border py-2 px-4 rounded-full w-full'):
+                        ui.image('/static/placeholder.png').classes('rounded-full w-8 h-8')
+                        ui.link(link['label'], link['url'], new_tab=True).classes(
+                            'font-semibold text-lg'
+                        ).style(f'color: {lnk};')
+
+        # Wallets
+        if user['stellar_address']:
+            with ui.column().classes('w-full gap-2 border p-4 rounded-lg'):
+                ui.label('WALLETS').classes('text-lg font-bold').style(f'color: {txt};')
+                with ui.row().classes('items-center gap-2 w-full'):
+                    ui.image('/static/placeholder.png').classes('rounded-full w-8 h-8')
+                    ui.label(user['stellar_address']).classes('text-sm font-mono break-all flex-1')
+                    ui.button(icon='content_copy', on_click=lambda: ui.run_javascript(
+                        f"navigator.clipboard.writeText('{user['stellar_address']}')"
+                    )).props('flat dense size=sm')
+
+    # Bottom bar with back-to-home
+    with ui.footer().classes('bg-[#8c52ff] flex justify-center items-center py-3'):
+        ui.button(icon='arrow_back', on_click=lambda: ui.navigate.to('/')).props('flat round').style('color: white;')
 
 
 # ─── Launch Credentials ──────────────────────────────────────────────────────

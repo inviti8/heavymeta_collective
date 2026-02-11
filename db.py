@@ -27,6 +27,14 @@ CREATE TABLE IF NOT EXISTS link_tree (
     sort_order  INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS profile_colors (
+    user_id      TEXT PRIMARY KEY REFERENCES users(id),
+    bg_color     TEXT DEFAULT '#ffffff',
+    text_color   TEXT DEFAULT '#000000',
+    accent_color TEXT DEFAULT '#8c52ff',
+    link_color   TEXT DEFAULT '#8c52ff'
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id              TEXT PRIMARY KEY,
     user_id         TEXT REFERENCES users(id),
@@ -175,4 +183,41 @@ async def update_link(link_id, **fields):
 async def delete_link(link_id):
     async with aiosqlite.connect(DATABASE_PATH) as conn:
         await conn.execute("DELETE FROM link_tree WHERE id = ?", (link_id,))
+        await conn.commit()
+
+
+# --- Profile Colors ---
+
+_COLOR_DEFAULTS = {
+    'bg_color': '#ffffff',
+    'text_color': '#000000',
+    'accent_color': '#8c52ff',
+    'link_color': '#8c52ff',
+}
+
+
+async def get_profile_colors(user_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM profile_colors WHERE user_id = ?", (user_id,)
+        )
+        row = await cursor.fetchone()
+    if row:
+        return {k: row[k] for k in _COLOR_DEFAULTS}
+    return dict(_COLOR_DEFAULTS)
+
+
+async def upsert_profile_colors(user_id, bg_color, text_color, accent_color, link_color):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            """INSERT INTO profile_colors (user_id, bg_color, text_color, accent_color, link_color)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                   bg_color = excluded.bg_color,
+                   text_color = excluded.text_color,
+                   accent_color = excluded.accent_color,
+                   link_color = excluded.link_color""",
+            (user_id, bg_color, text_color, accent_color, link_color),
+        )
         await conn.commit()
