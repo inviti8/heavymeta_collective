@@ -1,10 +1,9 @@
 from nicegui import ui
-from components import style_page
 from config import KUBO_GATEWAY, BLOCK_EXPLORER
 
 
-def render_linktree(linktree: dict, ipns_name: str):
-    style_page('Heavymeta Profile')
+def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
+    ui.page_title('Heavymeta Profile')
 
     moniker = linktree.get('moniker', 'Unknown')
     colors = linktree.get('colors', {}).get('light', {})
@@ -20,6 +19,11 @@ def render_linktree(linktree: dict, ipns_name: str):
                   if avatar_cid else '/static/placeholder.png')
 
     ui.query('body').style(f'background-color: {bg};')
+
+    if is_preview:
+        ui.button(icon='chevron_left', on_click=lambda: ui.navigate.back()).props(
+            'flat round'
+        ).classes('absolute top-2 left-2 opacity-70').style(f'color: {txt};')
 
     with ui.column().classes(
         'w-full items-center py-8'

@@ -523,11 +523,14 @@ async def settings():
                               override_enabled=bool(psettings['linktree_override']),
                               override_url=psettings['linktree_url'],
                               ipns_name=user['ipns_name'])
-    show_dashboard_chrome(header)
+    hide_dashboard_chrome(header)
 
     colors = await db.get_profile_colors(user_id)
 
     with ui.column().classes('w-full items-center gap-4 pb-24'):
+        ui.button(icon='chevron_left', on_click=lambda: ui.navigate.back()).props(
+            'flat round'
+        ).classes('self-start ml-4 mt-4 text-black opacity-70')
         with ui.column().classes('w-[75vw] gap-6'):
             ui.label('COLOR SETTINGS').classes('text-3xl font-bold')
             ui.label('Customize the colors on your public profile.').classes('text-sm opacity-70')
@@ -595,7 +598,7 @@ async def linktree_page(ipns_name: str):
     """Public linktree rendered from IPFS/IPNS JSON."""
     user = await db.get_user_by_ipns_name(ipns_name)
     if not user:
-        style_page('Heavymeta Profile')
+        ui.page_title('Heavymeta Profile')
         with ui.column().classes('w-full items-center mt-24'):
             ui.label('Profile not found.').classes('text-2xl opacity-50')
         return
@@ -610,7 +613,7 @@ async def linktree_page(ipns_name: str):
         ui.navigate.to(linktree['override_url'])
         return
 
-    render_linktree(linktree, ipns_name)
+    render_linktree(linktree, ipns_name, is_preview=is_owner)
 
 
 # ─── Legacy Profile Redirect ────────────────────────────────────────────────
@@ -631,7 +634,7 @@ async def public_profile(moniker_slug: str):
         user = await cursor.fetchone()
 
     if not user:
-        style_page('Heavymeta Profile')
+        ui.page_title('Heavymeta Profile')
         with ui.column().classes('w-full items-center mt-24'):
             ui.label('Profile not found.').classes('text-2xl opacity-50')
         return
@@ -645,11 +648,11 @@ async def public_profile(moniker_slug: str):
     is_owner = app.storage.user.get('user_id') == user['id']
     if is_owner:
         linktree = await ipfs_client.build_linktree_fresh(user['id'])
-        render_linktree(linktree, '')
+        render_linktree(linktree, '', is_preview=True)
         return
 
     # External visitor, no IPNS — can't render
-    style_page('Heavymeta Profile')
+    ui.page_title('Heavymeta Profile')
     with ui.column().classes('w-full items-center mt-24'):
         ui.label('Profile not yet published.').classes('text-2xl opacity-50')
 
@@ -661,7 +664,7 @@ async def launch():
     if not require_coop():
         return
 
-    style_page('Launch Credentials')
+    ui.page_title('Launch Credentials')
 
     user_id = app.storage.user.get('user_id')
     user = await db.get_user_by_id(user_id)
@@ -669,6 +672,9 @@ async def launch():
     with ui.column(
     ).classes('w-full items-center gap-8 mt-12'
     ).style('padding-inline: clamp(1rem, 25vw, 50rem);'):
+        ui.button(icon='chevron_left', on_click=lambda: ui.navigate.back()).props(
+            'flat round'
+        ).classes('self-start text-black opacity-70')
         ui.label('YOUR PINTHEON NODE CREDENTIALS').classes('text-3xl font-semibold tracking-wide')
 
         with ui.card().classes('w-full p-6 gap-4'):

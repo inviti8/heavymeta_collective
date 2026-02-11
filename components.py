@@ -80,6 +80,21 @@ def dashboard_header(moniker, member_type, user_id=None,
     ).classes(
         'text-black justify-start items-center bg-gradient-to-r from-[#f2d894] to-[#d6a5e2] pl-6'
     ).style('position: relative;') as header:
+        # Top-left logout caret
+        def _confirm_logout():
+            with ui.dialog() as dlg, ui.card().classes('p-6 gap-4'):
+                ui.label('Log out?').classes('text-lg font-semibold')
+                with ui.row().classes('w-full justify-end gap-2'):
+                    ui.button('Cancel', on_click=dlg.close).props('flat')
+                    ui.button('Log out', on_click=lambda: _logout()).props('flat color=red')
+            dlg.open()
+
+        ui.button(
+            icon='logout', on_click=_confirm_logout,
+        ).props('flat round').classes('absolute top-2 left-2 text-black opacity-70').style(
+            'font-size: 18px;'
+        )
+
         # Top-right icon buttons
         with ui.row().classes('absolute top-2 right-4 gap-2 items-center'):
             preview_url = f'/profile/{moniker_slug}'
