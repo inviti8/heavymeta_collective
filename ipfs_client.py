@@ -1,5 +1,6 @@
 """Thin async wrapper around Kubo's HTTP API for IPFS/IPNS operations."""
 
+import asyncio
 import base64
 import json
 import os
@@ -229,3 +230,86 @@ def build_linktree_json(*, moniker, member_type, stellar_address=None,
         "card_design_cid": card_design_cid,
         "override_url": override_url or "",
     }
+
+
+# ── Linktree Fetch / Republish ──
+
+async def fetch_linktree_json(user) -> dict:
+    """Fetch published linktree JSON from local Kubo by CID.
+    Used for external visitors."""
+    raw = await ipfs_cat(user['linktree_cid'])
+    return json.loads(raw)
+
+
+async def build_linktree_fresh(user_id: str) -> dict:
+    """Build linktree JSON directly from SQLite (skips IPFS).
+    Used for owner preview so edits are visible immediately."""
+    import db as _db
+
+    user = await _db.get_user_by_id(user_id)
+    links = await _db.get_links(user_id)
+    colors = await _db.get_profile_colors(user_id)
+    settings = await _db.get_profile_settings(user_id)
+
+    return build_linktree_json(
+        moniker=user['moniker'],
+        member_type=user['member_type'],
+        stellar_address=user['stellar_address'],
+        links=[dict(link) for link in links],
+        colors=colors,
+        avatar_cid=None,
+        card_design_cid=user.get('nfc_image_cid'),
+        settings=settings,
+    )
+
+
+async def republish_linktree(user_id: str) -> str | None:
+    """Rebuild linktree JSON from SQLite and re-publish to IPFS/IPNS.
+
+    Returns the new CID on success, None on failure.
+    Called after every linktree-relevant edit.
+    """
+    import db as _db
+
+    user = await _db.get_user_by_id(user_id)
+    if not user or not user['ipns_key_name']:
+        return None
+
+    links = await _db.get_links(user_id)
+    colors = await _db.get_profile_colors(user_id)
+    settings = await _db.get_profile_settings(user_id)
+
+    linktree = build_linktree_json(
+        moniker=user['moniker'],
+        member_type=user['member_type'],
+        stellar_address=user['stellar_address'],
+        links=[dict(link) for link in links],
+        colors=colors,
+        avatar_cid=None,
+        card_design_cid=user.get('nfc_image_cid'),
+        settings=settings,
+    )
+
+    try:
+        new_cid, _ = await publish_linktree(
+            user['ipns_key_name'],
+            linktree,
+            old_json_cid=user.get('linktree_cid'),
+        )
+        await _db.update_user(user_id, linktree_cid=new_cid)
+        return new_cid
+    except Exception:
+        return None
+
+
+def schedule_republish(user_id: str):
+    """Schedule a non-blocking linktree republish."""
+    asyncio.create_task(_safe_republish(user_id))
+
+
+async def _safe_republish(user_id: str):
+    """Wrapper that catches all exceptions to avoid unhandled task errors."""
+    try:
+        await republish_linktree(user_id)
+    except Exception:
+        pass
