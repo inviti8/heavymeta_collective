@@ -5,7 +5,7 @@ from payments.pricing import get_stripe_price_cents, fetch_xlm_price
 stripe.api_key = STRIPE_SECRET_KEY
 
 
-def create_checkout_session(order_id, email, moniker, user_id, base_url='http://localhost:8080'):
+def create_checkout_session(order_id, email, moniker, password_hash, base_url='http://localhost:8080'):
     price_cents = get_stripe_price_cents()
     xlm_price = fetch_xlm_price()
 
@@ -28,12 +28,28 @@ def create_checkout_session(order_id, email, moniker, user_id, base_url='http://
         customer_email=email,
         metadata={
             'order_id': order_id,
-            'user_id': user_id,
+            'email': email,
             'moniker': moniker,
+            'password_hash': password_hash,
             'xlm_price_usd': str(xlm_price),
         },
     )
     return session
+
+
+def retrieve_checkout_session(session_id):
+    """Retrieve a completed Stripe checkout session and extract enrollment data."""
+    cs = stripe.checkout.Session.retrieve(session_id)
+    if cs.payment_status != 'paid':
+        return None
+    return {
+        'email': cs.metadata['email'],
+        'moniker': cs.metadata['moniker'],
+        'password_hash': cs.metadata['password_hash'],
+        'order_id': cs.metadata['order_id'],
+        'xlm_price_usd': float(cs.metadata.get('xlm_price_usd', 0)),
+        'payment_intent': cs.payment_intent or '',
+    }
 
 
 def handle_webhook(payload, sig_header):
@@ -45,9 +61,10 @@ def handle_webhook(payload, sig_header):
         session = event['data']['object']
         return {
             'completed': True,
-            'user_id': session['metadata']['user_id'],
-            'order_id': session['metadata']['order_id'],
+            'email': session['metadata']['email'],
             'moniker': session['metadata']['moniker'],
+            'password_hash': session['metadata']['password_hash'],
+            'order_id': session['metadata']['order_id'],
             'xlm_price_usd': float(session['metadata'].get('xlm_price_usd', 0)),
             'payment_intent': session.get('payment_intent', ''),
         }

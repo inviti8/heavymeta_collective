@@ -5,20 +5,17 @@ from fastapi import Request, HTTPException
 import os
 import httpx
 from components import (
-    style_page, form_field, image_with_text,
+    style_page, image_with_text,
     dashboard_nav, dashboard_header,
     hide_dashboard_chrome, show_dashboard_chrome,
 )
-from auth import (
-    validate_signup_form, login_user, set_session, require_auth, require_coop,
-    hash_password,
-)
-from enrollment import process_free_enrollment, process_paid_enrollment, finalize_pending_enrollment
-from payments.pricing import XLM_COST, get_xlm_usd_equivalent, get_stripe_price_display, fetch_xlm_price
-from payments.stellar_pay import create_stellar_payment_request, check_payment
-from payments.stripe_pay import create_checkout_session, handle_webhook
+from auth import set_session, require_auth, require_coop
+from enrollment import process_paid_enrollment, finalize_pending_enrollment
+from payments.stripe_pay import handle_webhook, retrieve_checkout_session
+from auth_dialog import open_auth_dialog
 from launch import generate_launch_credentials
 import ipfs_client
+from linktree_renderer import render_linktree
 import time as _time
 
 static_files_dir = os.path.join(os.path.dirname(__file__), 'static')
@@ -38,13 +35,31 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail='Invalid signature')
 
     if result.get('completed'):
-        await finalize_pending_enrollment(
-            user_id=result['user_id'],
-            order_id=result['order_id'],
-            payment_method='stripe',
-            tx_hash=result['payment_intent'],
-            xlm_price_usd=result.get('xlm_price_usd'),
-        )
+        # Idempotency: skip if user already upgraded to coop
+        existing = await db.get_user_by_email(result['email'])
+        if existing and existing['member_type'] == 'coop':
+            return {'status': 'ok'}
+
+        if existing:
+            # Legacy: user was created as 'free' before payment
+            await finalize_pending_enrollment(
+                user_id=existing['id'],
+                order_id=result['order_id'],
+                payment_method='stripe',
+                tx_hash=result['payment_intent'],
+                xlm_price_usd=result.get('xlm_price_usd'),
+            )
+        else:
+            # New flow: no user in DB yet — create from scratch
+            await process_paid_enrollment(
+                email=result['email'],
+                moniker=result['moniker'],
+                password_hash=result['password_hash'],
+                order_id=result['order_id'],
+                payment_method='stripe',
+                tx_hash=result['payment_intent'],
+                xlm_price_usd=result.get('xlm_price_usd'),
+            )
     return {'status': 'ok'}
 
 
@@ -66,7 +81,7 @@ def landing():
 
         ui.button(
             'JOIN',
-            on_click=lambda: ui.navigate.to('/join'),
+            on_click=lambda: open_auth_dialog('join'),
         ).classes('mt-8 px-8 py-3 text-lg w-1/2')
 
 
@@ -74,235 +89,42 @@ def landing():
 
 @ui.page('/join')
 def join():
-    style_page('Join HEAVYMETA')
-
-    with ui.column(
-    ).classes(
-        'w-full items-center gap-8 mt-12'
-    ).style(
-        'padding-inline: clamp(1rem, 35vw, 50rem);'
-    ):
-        ui.label('JOIN').classes('text-5xl font-semibold tracking-wide')
-        with ui.row().classes('items-center gap-2'):
-            ui.label('Already Registered?').classes('text-xl tracking-wide')
-            ui.link('Login', '/login').classes('text-primary text-xl font-bold tracking-wide no-underline')
-
-        moniker = form_field('MONIKER', 'Create a moniker')
-        email = form_field('EMAIL', 'Enter your email')
-        password = form_field('PASSWORD', 'Create a password', True)
-
-        with ui.column().classes('w-full gap-1'):
-            ui.label('MEMBERSHIP TIER').classes('text-base tracking-widest opacity-70')
-            tier = ui.radio(
-                {'free': 'FREE — Link-tree only', 'coop': 'COOP MEMBER — Full access'},
-                value='free',
-            ).classes('w-full')
-
-        error_label = ui.label('').classes('text-red-500 text-sm')
-        error_label.set_visibility(False)
-
-        # ── Payment section (coop only) ──
-        with ui.column().classes('w-full gap-4') as payment_section:
-            ui.separator()
-            ui.label('PAYMENT METHOD').classes('text-base tracking-widest opacity-70')
-            with ui.row().classes('items-center gap-2'):
-                ui.label('XLM').classes('text-sm font-bold')
-                payment_toggle = ui.switch('', value=False)
-                ui.label('CARD').classes('text-sm font-bold')
-
-            # XLM details panel
-            with ui.column().classes('w-full gap-2') as xlm_panel:
-                try:
-                    usd_equiv = get_xlm_usd_equivalent()
-                    ui.label(f'PRICE: {XLM_COST} XLM (~${usd_equiv:.2f} USD)').classes('text-lg font-bold')
-                except Exception:
-                    ui.label(f'PRICE: {XLM_COST} XLM').classes('text-lg font-bold')
-
-            xlm_panel.bind_visibility_from(payment_toggle, 'value', backward=lambda v: not v)
-
-            # Card details panel
-            with ui.column().classes('w-full gap-2') as card_panel:
-                try:
-                    stripe_display = get_stripe_price_display()
-                    ui.label(f'PRICE: {stripe_display} USD (2x crypto price)').classes('text-lg font-bold')
-                except Exception:
-                    ui.label('PRICE: calculating...').classes('text-lg font-bold')
-                ui.label('Join the future. Pay less with crypto.').classes('text-sm opacity-70 italic')
-
-            card_panel.bind_visibility_from(payment_toggle, 'value', backward=lambda v: v)
-
-        payment_section.bind_visibility_from(tier, 'value', backward=lambda v: v == 'coop')
-
-        # ── Signup handler ──
-        async def handle_signup():
-            error_label.set_visibility(False)
-
-            errors = await validate_signup_form(moniker.value, email.value, password.value)
-            if errors:
-                error_label.text = ' '.join(errors)
-                error_label.set_visibility(True)
-                return
-
-            if tier.value == 'free':
-                try:
-                    user_id = await process_free_enrollment(
-                        moniker.value, email.value, password.value
-                    )
-                    user = await db.get_user_by_id(user_id)
-                    set_session(dict(user))
-                    ui.navigate.to('/profile/edit')
-                except Exception as e:
-                    error_label.text = f'Signup failed: {e}'
-                    error_label.set_visibility(True)
-            else:
-                # Coop — route to payment
-                pw_hash = hash_password(password.value)
-                if not payment_toggle.value:
-                    # XLM payment
-                    pay_req = create_stellar_payment_request()
-                    # Store form data in session for the QR page
-                    app.storage.user['pending_signup'] = {
-                        'moniker': moniker.value.strip(),
-                        'email': email.value.strip(),
-                        'password_hash': pw_hash,
-                        'order_id': pay_req['order_id'],
-                        'memo': pay_req['memo'],
-                        'qr': pay_req['qr'],
-                        'address': pay_req['address'],
-                        'amount': pay_req['amount'],
-                    }
-                    ui.navigate.to('/join/pay/xlm')
-                else:
-                    # Stripe payment — create pending user, redirect to Stripe
-                    try:
-                        user_id = await db.create_user(
-                            email=email.value.strip(),
-                            moniker=moniker.value.strip(),
-                            member_type='free',  # pending, will be upgraded by webhook
-                            password_hash=pw_hash,
-                        )
-                        order_id = f"stripe-{user_id[:8]}"
-                        session = create_checkout_session(
-                            order_id=order_id,
-                            email=email.value.strip(),
-                            moniker=moniker.value.strip(),
-                            user_id=user_id,
-                        )
-                        await ui.run_javascript(f"window.location.href='{session.url}'")
-                    except Exception as e:
-                        error_label.text = f'Payment setup failed: {e}'
-                        error_label.set_visibility(True)
-
-        def update_button_text():
-            if tier.value == 'coop':
-                if payment_toggle.value:
-                    try:
-                        signup_btn.text = f'SIGN UP — PAY {get_stripe_price_display()}'
-                    except Exception:
-                        signup_btn.text = 'SIGN UP — PAY BY CARD'
-                else:
-                    signup_btn.text = f'SIGN UP — PAY {XLM_COST} XLM'
-            else:
-                signup_btn.text = 'SIGN UP — FREE'
-
-        signup_btn = ui.button(
-            'SIGN UP — FREE',
-            on_click=handle_signup,
-        ).classes('mt-8 px-8 py-3 text-lg w-1/2')
-
-        tier.on_value_change(lambda: update_button_text())
-        payment_toggle.on_value_change(lambda: update_button_text())
+    style_page('HEAVYMETA')
+    open_auth_dialog('join')
 
 
-# ─── XLM Payment Page ────────────────────────────────────────────────────────
+# ─── XLM Payment Page (redirects to dialog) ──────────────────────────────────
 
 @ui.page('/join/pay/xlm')
 def pay_xlm():
-    style_page('Complete Payment')
-
-    pending = app.storage.user.get('pending_signup')
-    if not pending:
-        ui.navigate.to('/join')
-        return
-
-    with ui.column(
-    ).classes('w-full items-center gap-8 mt-12'
-    ).style('padding-inline: clamp(1rem, 25vw, 50rem);'):
-        ui.label('COMPLETE YOUR PAYMENT').classes('text-3xl font-semibold tracking-wide')
-        ui.label(f'Send exactly {pending["amount"]} XLM to:').classes('text-lg')
-
-        with ui.card().classes('w-full items-center p-6 gap-4'):
-            # QR code
-            ui.image(pending['qr']).classes('w-64 h-64')
-
-            # Address with copy
-            with ui.row().classes('items-center gap-2 w-full'):
-                ui.label('Address:').classes('font-bold text-sm')
-                addr_label = ui.label(pending['address']).classes('text-xs font-mono break-all flex-1')
-                ui.button(icon='content_copy', on_click=lambda: ui.run_javascript(
-                    f"navigator.clipboard.writeText('{pending['address']}')"
-                )).props('flat dense size=sm')
-
-            # Amount
-            with ui.row().classes('items-center gap-2'):
-                ui.label('Amount:').classes('font-bold text-sm')
-                ui.label(f'{pending["amount"]} XLM').classes('text-sm')
-
-            # Memo with copy
-            with ui.row().classes('items-center gap-2 w-full'):
-                ui.label('Memo:').classes('font-bold text-sm')
-                ui.label(pending['memo']).classes('text-xs font-mono flex-1')
-                ui.button(icon='content_copy', on_click=lambda: ui.run_javascript(
-                    f"navigator.clipboard.writeText('{pending['memo']}')"
-                )).props('flat dense size=sm')
-
-            ui.separator()
-            status_label = ui.label('Waiting for payment...').classes('text-sm opacity-70')
-            spinner = ui.spinner('dots', size='lg')
-
-        # Poll for payment
-        async def check_and_update():
-            result = check_payment(pending['memo'])
-            if result['paid']:
-                timer.deactivate()
-                spinner.set_visibility(False)
-                status_label.text = 'Payment confirmed!'
-
-                # Process enrollment
-                try:
-                    xlm_price = fetch_xlm_price()
-                    user_id, stellar_address = await process_paid_enrollment(
-                        email=pending['email'],
-                        moniker=pending['moniker'],
-                        password_hash=pending['password_hash'],
-                        order_id=pending['order_id'],
-                        payment_method='stellar',
-                        tx_hash=result['hash'],
-                        xlm_price_usd=xlm_price,
-                    )
-                    # Auto-login and redirect to dashboard
-                    user = await db.get_user_by_id(user_id)
-                    set_session(dict(user))
-                    del app.storage.user['pending_signup']
-                    ui.navigate.to('/profile/edit')
-                except Exception as e:
-                    status_label.text = f'Payment received but enrollment failed: {e}'
-
-        timer = ui.timer(5.0, check_and_update)
+    style_page('HEAVYMETA')
+    open_auth_dialog('join')
 
 
 # ─── Success Page ─────────────────────────────────────────────────────────────
 
 @ui.page('/join/success')
-async def join_success():
-    """Stripe redirects here after checkout. Webhook may have already completed enrollment."""
+async def join_success(session_id: str = ''):
+    """Stripe redirects here after checkout. Verifies payment and triggers enrollment."""
     # If already logged in as coop, go straight to dashboard
     if app.storage.user.get('authenticated') and app.storage.user.get('member_type') == 'coop':
         ui.navigate.to('/profile/edit')
         return
 
-    # Webhook may still be processing — poll until user is upgraded
+    # Get pending email (new flow) or user_id (legacy)
+    pending = app.storage.user.get('pending_stripe', {})
+    pending_email = pending.get('email')
     user_id = app.storage.user.get('user_id')
+
+    if not pending_email and not user_id and not session_id:
+        style_page('Welcome!')
+        with ui.column(
+        ).classes('w-full items-center gap-8 mt-12'
+        ).style('padding-inline: clamp(1rem, 25vw, 50rem);'):
+            ui.label('Session expired.').classes('text-2xl font-semibold')
+            ui.label('Please log in to check your membership status.').classes('text-sm opacity-70')
+            ui.button('LOGIN', on_click=lambda: open_auth_dialog('login')).classes('mt-4')
+        return
 
     style_page('Welcome!')
 
@@ -313,17 +135,85 @@ async def join_success():
         spinner = ui.spinner('dots', size='lg')
         status_label = ui.label('Waiting for payment confirmation...').classes('text-sm opacity-70')
 
+    _enrollment_triggered = False
+
     async def check_enrollment():
-        if not user_id:
-            status_label.text = 'Session expired. Please log in.'
-            spinner.set_visibility(False)
-            timer.deactivate()
-            return
-        user = await db.get_user_by_id(user_id)
+        nonlocal _enrollment_triggered
+
+        # 1. Check if webhook already created the user as coop
+        user = None
+        if pending_email:
+            user = await db.get_user_by_email(pending_email)
+        elif user_id:
+            user = await db.get_user_by_id(user_id)
+
         if user and user['member_type'] == 'coop':
             timer.deactivate()
+            spinner.set_visibility(False)
             set_session(dict(user))
+            if 'pending_stripe' in app.storage.user:
+                del app.storage.user['pending_stripe']
             ui.navigate.to('/profile/edit')
+            return
+
+        # 2. Webhook hasn't fired yet — verify payment via Stripe API directly
+        if session_id and not _enrollment_triggered:
+            try:
+                result = retrieve_checkout_session(session_id)
+            except Exception:
+                return  # Stripe API error, retry next poll
+
+            if result is None:
+                return  # Payment not yet complete, retry next poll
+
+            _enrollment_triggered = True
+            status_label.text = 'Payment confirmed — setting up your account...'
+
+            # Idempotency: check if user was created between polls
+            existing = await db.get_user_by_email(result['email'])
+            if existing and existing['member_type'] == 'coop':
+                timer.deactivate()
+                spinner.set_visibility(False)
+                set_session(dict(existing))
+                if 'pending_stripe' in app.storage.user:
+                    del app.storage.user['pending_stripe']
+                ui.navigate.to('/profile/edit')
+                return
+
+            try:
+                if existing:
+                    # Legacy: upgrade existing free user
+                    await finalize_pending_enrollment(
+                        user_id=existing['id'],
+                        order_id=result['order_id'],
+                        payment_method='stripe',
+                        tx_hash=result['payment_intent'],
+                        xlm_price_usd=result.get('xlm_price_usd'),
+                    )
+                    user = await db.get_user_by_id(existing['id'])
+                else:
+                    # New flow: create from scratch
+                    new_user_id, _ = await process_paid_enrollment(
+                        email=result['email'],
+                        moniker=result['moniker'],
+                        password_hash=result['password_hash'],
+                        order_id=result['order_id'],
+                        payment_method='stripe',
+                        tx_hash=result['payment_intent'],
+                        xlm_price_usd=result.get('xlm_price_usd'),
+                    )
+                    user = await db.get_user_by_id(new_user_id)
+
+                timer.deactivate()
+                spinner.set_visibility(False)
+                set_session(dict(user))
+                if 'pending_stripe' in app.storage.user:
+                    del app.storage.user['pending_stripe']
+                ui.navigate.to('/profile/edit')
+            except Exception as e:
+                status_label.text = f'Account setup error: {e}'
+                spinner.set_visibility(False)
+                timer.deactivate()
 
     timer = ui.timer(3.0, check_enrollment)
 
@@ -332,44 +222,8 @@ async def join_success():
 
 @ui.page('/login')
 def login():
-    style_page('HEAVYMETA Login')
-
-    with ui.column(
-    ).classes(
-        'w-full items-center gap-8 mt-12'
-    ).style(
-        'padding-inline: clamp(1rem, 35vw, 50rem);'
-    ):
-        ui.label('LOGIN').classes('text-5xl font-semibold tracking-wide')
-
-        email = form_field('EMAIL', 'Enter your email')
-        password = form_field('PASSWORD', 'Enter your password', True)
-
-        error_label = ui.label('').classes('text-red-500 text-sm')
-        error_label.set_visibility(False)
-
-        async def handle_login():
-            error_label.set_visibility(False)
-            if not email.value or not password.value:
-                error_label.text = 'Please enter your email and password.'
-                error_label.set_visibility(True)
-                return
-
-            user, rate_error = await login_user(email.value.strip(), password.value)
-            if rate_error:
-                error_label.text = rate_error
-                error_label.set_visibility(True)
-            elif user:
-                set_session(user)
-                ui.navigate.to('/profile/edit')
-            else:
-                error_label.text = 'Invalid email or password.'
-                error_label.set_visibility(True)
-
-        ui.button(
-            'LOGIN',
-            on_click=handle_login,
-        ).classes('mt-8 px-8 py-3 text-lg w-1/2')
+    style_page('HEAVYMETA')
+    open_auth_dialog('login')
 
 
 # ─── Dashboard (Profile) ─────────────────────────────────────────────────────
@@ -387,7 +241,8 @@ async def profile():
 
     header = dashboard_header(moniker, member_type, user_id=user_id,
                               override_enabled=bool(psettings['linktree_override']),
-                              override_url=psettings['linktree_url'])
+                              override_url=psettings['linktree_url'],
+                              ipns_name=user['ipns_name'])
     show_dashboard_chrome(header)
 
     with ui.column().classes('w-full items-center gap-4 pb-24'):
@@ -396,7 +251,7 @@ async def profile():
             with ui.card().classes('w-[75vw] bg-gradient-to-r from-purple-100 to-yellow-100'):
                 ui.label('Join the Coop').classes('text-xl font-bold')
                 ui.label('Get full access, NFC card, and Pintheon node credentials.').classes('text-sm opacity-70')
-                ui.button('UPGRADE', on_click=lambda: ui.navigate.to('/join')).classes('mt-2')
+                ui.button('UPGRADE', on_click=lambda: open_auth_dialog('join')).classes('mt-2')
 
         # ── Links section with CRUD ──
         with ui.column().classes('w-[75vw] gap-2 border p-4 rounded-lg'):
@@ -438,6 +293,7 @@ async def profile():
                                 label=add_label.value.strip(),
                                 url=add_url.value.strip(),
                             )
+                            ipfs_client.schedule_republish(user_id)
                             add_label.value = ''
                             add_url.value = ''
                             links_section.refresh()
@@ -473,6 +329,7 @@ async def profile():
                                     label=edit_label.value.strip(),
                                     url=edit_url.value.strip(),
                                 )
+                                ipfs_client.schedule_republish(user_id)
                                 dialog.close()
                                 links_section.refresh()
 
@@ -488,6 +345,7 @@ async def profile():
 
                         async def do_delete():
                             await db.delete_link(link_id)
+                            ipfs_client.schedule_republish(user_id)
                             dialog.close()
                             links_section.refresh()
 
@@ -527,7 +385,8 @@ async def card_editor():
     # Header hidden, footer visible
     header = dashboard_header(moniker, member_type, user_id=user_id,
                               override_enabled=bool(psettings['linktree_override']),
-                              override_url=psettings['linktree_url'])
+                              override_url=psettings['linktree_url'],
+                              ipns_name=user['ipns_name'])
     hide_dashboard_chrome(header)
 
     # Three.js import map + full-viewport CSS
@@ -576,6 +435,7 @@ async def card_editor():
             old_cid = user_row[cid_column]
             new_cid = await ipfs_client.replace_asset(content, old_cid, filename)
             await db.update_user(user_id, **{cid_column: new_cid})
+            ipfs_client.schedule_republish(user_id)
             texture_url = f'{config.KUBO_GATEWAY}/ipfs/{new_cid}'
             await ui.run_javascript(f"window.updateCardTexture('{face}', '{texture_url}')")
             ui.notify(f'Card {face} image saved', type='positive')
@@ -616,7 +476,8 @@ async def card_case():
 
     header = dashboard_header(moniker, member_type, user_id=user_id,
                               override_enabled=bool(psettings['linktree_override']),
-                              override_url=psettings['linktree_url'])
+                              override_url=psettings['linktree_url'],
+                              ipns_name=user['ipns_name'])
     hide_dashboard_chrome(header)
 
     with ui.column().classes('w-full items-center gap-4 pb-24'):
@@ -660,7 +521,8 @@ async def settings():
 
     header = dashboard_header(moniker, member_type, user_id=user_id,
                               override_enabled=bool(psettings['linktree_override']),
-                              override_url=psettings['linktree_url'])
+                              override_url=psettings['linktree_url'],
+                              ipns_name=user['ipns_name'])
     show_dashboard_chrome(header)
 
     colors = await db.get_profile_colors(user_id)
@@ -717,6 +579,7 @@ async def settings():
                     accent_color=accent_input.value or '#8c52ff',
                     link_color=link_input.value or '#8c52ff',
                 )
+                ipfs_client.schedule_republish(user_id)
                 save_label.text = 'Colors saved!'
                 save_label.set_visibility(True)
 
@@ -725,86 +588,54 @@ async def settings():
     dashboard_nav()
 
 
-# ─── Public Profile (Client View) ───────────────────────────────────────────
+# ─── Public Linktree (IPFS/IPNS) ────────────────────────────────────────────
 
-@ui.page('/profile/{moniker_slug}')
-async def public_profile(moniker_slug: str):
-    style_page('Heavymeta Profile')
-
-    # Look up user by moniker
-    import aiosqlite
-    from config import DATABASE_PATH, BLOCK_EXPLORER, NET
-    async with aiosqlite.connect(DATABASE_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cursor = await conn.execute(
-            "SELECT * FROM users WHERE LOWER(REPLACE(moniker, ' ', '-')) = ?",
-            (moniker_slug.lower(),)
-        )
-        user = await cursor.fetchone()
-
+@ui.page('/lt/{ipns_name}')
+async def linktree_page(ipns_name: str):
+    """Public linktree rendered from IPFS/IPNS JSON."""
+    user = await db.get_user_by_ipns_name(ipns_name)
     if not user:
+        style_page('Heavymeta Profile')
         with ui.column().classes('w-full items-center mt-24'):
             ui.label('Profile not found.').classes('text-2xl opacity-50')
         return
 
-    # Check for linktree override redirect
-    psettings = await db.get_profile_settings(user['id'])
-    if psettings['linktree_override'] and psettings['linktree_url']:
-        ui.navigate.to(psettings['linktree_url'])
+    is_owner = app.storage.user.get('user_id') == user['id']
+    if is_owner:
+        linktree = await ipfs_client.build_linktree_fresh(user['id'])
+    else:
+        linktree = await ipfs_client.fetch_linktree_json(user)
+
+    if linktree.get('override_url'):
+        ui.navigate.to(linktree['override_url'])
         return
 
-    # Load custom colors
-    colors = await db.get_profile_colors(user['id'])
-    bg = colors['bg_color']
-    txt = colors['text_color']
-    acc = colors['accent_color']
-    lnk = colors['link_color']
+    render_linktree(linktree, ipns_name)
 
-    # Apply background color
-    ui.query('body').style(f'background-color: {bg};')
 
-    # Client View header — blend accent into gradient end-color
-    with ui.column().classes(
-        'w-full items-center py-8'
-    ).style(f'background: linear-gradient(to right, #f2d894, {acc}40);'):
-        ui.image('/static/placeholder.png').classes('w-32 h-32 rounded-full shadow-md')
-        ui.label(user['moniker']).classes('text-3xl font-bold mt-4').style(f'color: {txt};')
-        if user['stellar_address']:
-            addr = user['stellar_address']
-            short = f"{addr[:6]}...{addr[-4:]}"
-            ui.link(short, f'{BLOCK_EXPLORER}/account/{addr}', new_tab=True).classes(
-                'font-semibold text-sm'
-            ).style(f'color: {lnk};')
+# ─── Legacy Profile Redirect ────────────────────────────────────────────────
 
-    with ui.column().classes('w-full items-center gap-8 mt-8').style(
-        'padding-inline: clamp(1rem, 25vw, 50rem);'
-    ):
-        # Links
-        links = await db.get_links(user['id'])
-        if links:
-            with ui.column().classes('w-full gap-2 border p-4 rounded-lg'):
-                ui.label('LINKS').classes('text-lg font-bold').style(f'color: {txt};')
-                for link in links:
-                    with ui.row().classes('items-center border py-2 px-4 rounded-full w-full'):
-                        ui.image('/static/placeholder.png').classes('rounded-full w-8 h-8')
-                        ui.link(link['label'], link['url'], new_tab=True).classes(
-                            'font-semibold text-lg'
-                        ).style(f'color: {lnk};')
+@ui.page('/profile/{moniker_slug}')
+async def public_profile(moniker_slug: str):
+    """Legacy route — redirects to /lt/{ipns_name}."""
+    import aiosqlite
+    from config import DATABASE_PATH
 
-        # Wallets
-        if user['stellar_address']:
-            with ui.column().classes('w-full gap-2 border p-4 rounded-lg'):
-                ui.label('WALLETS').classes('text-lg font-bold').style(f'color: {txt};')
-                with ui.row().classes('items-center gap-2 w-full'):
-                    ui.image('/static/placeholder.png').classes('rounded-full w-8 h-8')
-                    ui.label(user['stellar_address']).classes('text-sm font-mono break-all flex-1')
-                    ui.button(icon='content_copy', on_click=lambda: ui.run_javascript(
-                        f"navigator.clipboard.writeText('{user['stellar_address']}')"
-                    )).props('flat dense size=sm')
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT ipns_name FROM users WHERE LOWER(REPLACE(moniker, ' ', '-')) = ?",
+            (moniker_slug.lower(),)
+        )
+        user = await cursor.fetchone()
 
-    # Bottom bar with back-to-home
-    with ui.footer().classes('bg-[#8c52ff] flex justify-center items-center py-3'):
-        ui.button(icon='arrow_back', on_click=lambda: ui.navigate.to('/')).props('flat round').style('color: white;')
+    if not user or not user['ipns_name']:
+        style_page('Heavymeta Profile')
+        with ui.column().classes('w-full items-center mt-24'):
+            ui.label('Profile not found.').classes('text-2xl opacity-50')
+        return
+
+    ui.navigate.to(f'/lt/{user["ipns_name"]}')
 
 
 # ─── Launch Credentials ──────────────────────────────────────────────────────

@@ -41,8 +41,8 @@ def style_page(page_title: str):
                 ui.button('Launch', on_click=lambda: ui.navigate.to('/launch')).props('flat color=white')
             ui.button('Logout', on_click=lambda: _logout()).props('flat color=white')
         else:
-            ui.button('Join', on_click=lambda: ui.navigate.to('/join')).props('flat color=white')
-            ui.button('Login', on_click=lambda: ui.navigate.to('/login')).props('flat color=white')
+            ui.button('Join', on_click=lambda: _open_dialog('join')).props('flat color=white')
+            ui.button('Login', on_click=lambda: _open_dialog('login')).props('flat color=white')
 
 
 def dashboard_nav(active='dashboard'):
@@ -65,7 +65,8 @@ def dashboard_nav(active='dashboard'):
 
 
 def dashboard_header(moniker, member_type, user_id=None,
-                     override_enabled=False, override_url=''):
+                     override_enabled=False, override_url='',
+                     ipns_name=None):
     """Shared profile header for dashboard views."""
     moniker_slug = moniker.lower().replace(' ', '-')
     ui.add_head_html('''
@@ -81,9 +82,10 @@ def dashboard_header(moniker, member_type, user_id=None,
     ).style('position: relative;') as header:
         # Top-right icon buttons
         with ui.row().classes('absolute top-2 right-4 gap-2 items-center'):
+            preview_url = f'/lt/{ipns_name}' if ipns_name else f'/profile/{moniker_slug}'
             ui.button(
                 'PREVIEW',
-                on_click=lambda: ui.navigate.to(f'/profile/{moniker_slug}'),
+                on_click=lambda: ui.navigate.to(preview_url),
             ).props('flat dense rounded no-caps').classes(
                 'bg-white/50 text-black px-5 py-2'
             ).style('font-size: 16px;')
@@ -133,6 +135,8 @@ def dashboard_header(moniker, member_type, user_id=None,
                             linktree_override=int(override_toggle.value),
                             linktree_url=override_input.value.strip(),
                         )
+                        import ipfs_client as _ipfs
+                        _ipfs.schedule_republish(user_id)
 
                     override_toggle.on_value_change(lambda: _save_override())
                     override_input.on('change', lambda e: _save_override())
@@ -162,6 +166,11 @@ def show_dashboard_chrome(header, footer=None):
     if footer:
         footer.value = False
         ui.timer(0.05, footer.show, once=True)
+
+
+def _open_dialog(tab):
+    from auth_dialog import open_auth_dialog
+    open_auth_dialog(tab)
 
 
 def _logout():
