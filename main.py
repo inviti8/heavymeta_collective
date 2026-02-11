@@ -376,19 +376,22 @@ async def profile():
     user = await db.get_user_by_id(user_id)
     moniker = user['moniker'] if user else app.storage.user.get('moniker', 'Unknown')
     member_type = app.storage.user.get('member_type', 'free')
+    psettings = await db.get_profile_settings(user_id)
 
-    dashboard_header(moniker, member_type, user['stellar_address'] if user else None)
+    dashboard_header(moniker, member_type, user_id=user_id,
+                     override_enabled=bool(psettings['linktree_override']),
+                     override_url=psettings['linktree_url'])
 
-    with ui.column().classes('w-full items-center gap-8 mt-12 pb-24'):
+    with ui.column().classes('w-full items-center gap-8 mt-1 pb-24'):
         # Upgrade CTA for free users
         if member_type == 'free':
-            with ui.card().classes('w-[45vw] bg-gradient-to-r from-purple-100 to-yellow-100'):
+            with ui.card().classes('w-[75vw] bg-gradient-to-r from-purple-100 to-yellow-100'):
                 ui.label('Join the Coop').classes('text-xl font-bold')
                 ui.label('Get full access, NFC card, and Pintheon node credentials.').classes('text-sm opacity-70')
                 ui.button('UPGRADE', on_click=lambda: ui.navigate.to('/join')).classes('mt-2')
 
         # ── Links section with CRUD ──
-        with ui.column().classes('w-[45vw] gap-1 border p-4 rounded-lg'):
+        with ui.column().classes('w-[75vw] gap-2 border p-4 rounded-lg'):
             ui.label('LINKS').classes('text-2xl font-bold')
 
             @ui.refreshable
@@ -397,10 +400,17 @@ async def profile():
                 if links:
                     for link in links:
                         link_id = link['id']
-                        with ui.row().classes('items-center border py-2 px-4 rounded-full w-full gap-2'):
-                            ui.label(link['label']).classes('font-semibold')
+                        with ui.row().classes(
+                            'items-center bg-gray-100 py-2 px-4 rounded-full w-full gap-3'
+                        ):
+                            ui.image(
+                                link['icon_url'] or '/static/placeholder.png'
+                            ).classes('rounded-full w-8 h-8')
+                            ui.label(link['label']).classes(
+                                'font-semibold text-sm'
+                            ).style('min-width: 100px;')
                             ui.link(link['url'], link['url'], new_tab=True).classes(
-                                'text-[#8c52ff] text-lg ml-auto'
+                                'text-gray-500 text-sm flex-1 truncate'
                             )
                             ui.button(
                                 icon='edit',
@@ -410,29 +420,33 @@ async def profile():
                                 icon='delete',
                                 on_click=lambda lid=link_id: confirm_delete(lid),
                             ).props('flat dense size=sm color=red')
-                else:
-                    ui.label('No links yet.').classes('text-sm opacity-50')
+
+                # Add link row
+                with ui.row().classes('items-center w-full gap-2'):
+                    async def add_link():
+                        if add_label.value and add_url.value:
+                            await db.create_link(
+                                user_id=user_id,
+                                label=add_label.value.strip(),
+                                url=add_url.value.strip(),
+                            )
+                            add_label.value = ''
+                            add_url.value = ''
+                            links_section.refresh()
+
+                    ui.button(icon='add', on_click=add_link).props(
+                        'round outline dense size=sm'
+                    ).classes('text-black')
+                    add_label = ui.input('Label').props('outlined dense rounded').classes('w-28')
+                    add_url = ui.input('URL').props('outlined dense rounded').classes('flex-1')
+
+                # Empty placeholder slots
+                for _ in range(4):
+                    ui.element('div').classes(
+                        'w-full h-10 bg-gray-100 rounded-full'
+                    )
 
             await links_section()
-
-            # Add link form
-            ui.separator().classes('my-2')
-            with ui.row().classes('w-full gap-2 items-end'):
-                add_label = ui.input('Label').classes('flex-1').props('outlined dense')
-                add_url = ui.input('URL').classes('flex-1').props('outlined dense')
-
-                async def add_link():
-                    if add_label.value and add_url.value:
-                        await db.create_link(
-                            user_id=user_id,
-                            label=add_label.value.strip(),
-                            url=add_url.value.strip(),
-                        )
-                        add_label.value = ''
-                        add_url.value = ''
-                        links_section.refresh()
-
-                ui.button('ADD', on_click=add_link).props('dense')
 
             # Edit dialog
             async def open_edit_dialog(link_id, current_label, current_url):
@@ -474,7 +488,7 @@ async def profile():
 
         # Wallets section (coop only)
         if member_type == 'coop':
-            with ui.column().classes('w-[45vw] gap-1 border p-4 rounded-lg'):
+            with ui.column().classes('w-[75vw] gap-1 border p-4 rounded-lg'):
                 ui.label('WALLETS').classes('text-2xl font-bold')
                 if user and user['stellar_address']:
                     with ui.row().classes('items-center gap-2 w-full'):
@@ -495,11 +509,14 @@ async def card_editor():
     user = await db.get_user_by_id(user_id)
     moniker = user['moniker'] if user else app.storage.user.get('moniker', 'Unknown')
     member_type = app.storage.user.get('member_type', 'free')
+    psettings = await db.get_profile_settings(user_id)
 
-    dashboard_header(moniker, member_type, user['stellar_address'] if user else None)
+    dashboard_header(moniker, member_type, user_id=user_id,
+                     override_enabled=bool(psettings['linktree_override']),
+                     override_url=psettings['linktree_url'])
 
-    with ui.column().classes('w-full items-center gap-8 mt-12 pb-24'):
-        with ui.column().classes('w-[45vw] gap-4'):
+    with ui.column().classes('w-full items-center gap-8 mt-1 pb-24'):
+        with ui.column().classes('w-[75vw] gap-4'):
             # Editor tabs
             with ui.row().classes('gap-2'):
                 ui.button('PREVIEW', on_click=lambda: None).classes('px-4 py-1')
@@ -531,11 +548,14 @@ async def card_case():
     user = await db.get_user_by_id(user_id)
     moniker = user['moniker'] if user else app.storage.user.get('moniker', 'Unknown')
     member_type = app.storage.user.get('member_type', 'free')
+    psettings = await db.get_profile_settings(user_id)
 
-    dashboard_header(moniker, member_type, user['stellar_address'] if user else None)
+    dashboard_header(moniker, member_type, user_id=user_id,
+                     override_enabled=bool(psettings['linktree_override']),
+                     override_url=psettings['linktree_url'])
 
-    with ui.column().classes('w-full items-center gap-8 mt-12 pb-24'):
-        with ui.column().classes('w-[45vw] gap-4'):
+    with ui.column().classes('w-full items-center gap-8 mt-1 pb-24'):
+        with ui.column().classes('w-[75vw] gap-4'):
             ui.label('CARD CASE').classes('text-3xl font-bold')
             ui.label('Collect virtual cards from other Heavymeta members.').classes('text-sm opacity-70')
 
@@ -571,13 +591,16 @@ async def settings():
     user = await db.get_user_by_id(user_id)
     moniker = user['moniker'] if user else app.storage.user.get('moniker', 'Unknown')
     member_type = app.storage.user.get('member_type', 'free')
+    psettings = await db.get_profile_settings(user_id)
 
-    dashboard_header(moniker, member_type, user['stellar_address'] if user else None)
+    dashboard_header(moniker, member_type, user_id=user_id,
+                     override_enabled=bool(psettings['linktree_override']),
+                     override_url=psettings['linktree_url'])
 
     colors = await db.get_profile_colors(user_id)
 
-    with ui.column().classes('w-full items-center gap-8 mt-12 pb-24'):
-        with ui.column().classes('w-[45vw] gap-6'):
+    with ui.column().classes('w-full items-center gap-8 mt-1 pb-24'):
+        with ui.column().classes('w-[75vw] gap-6'):
             ui.label('COLOR SETTINGS').classes('text-3xl font-bold')
             ui.label('Customize the colors on your public profile.').classes('text-sm opacity-70')
 
@@ -656,6 +679,12 @@ async def public_profile(moniker_slug: str):
     if not user:
         with ui.column().classes('w-full items-center mt-24'):
             ui.label('Profile not found.').classes('text-2xl opacity-50')
+        return
+
+    # Check for linktree override redirect
+    psettings = await db.get_profile_settings(user['id'])
+    if psettings['linktree_override'] and psettings['linktree_url']:
+        ui.navigate.to(psettings['linktree_url'])
         return
 
     # Load custom colors

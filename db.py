@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS profile_colors (
     link_color   TEXT DEFAULT '#8c52ff'
 );
 
+CREATE TABLE IF NOT EXISTS profile_settings (
+    user_id           TEXT PRIMARY KEY REFERENCES users(id),
+    linktree_override INTEGER DEFAULT 0,
+    linktree_url      TEXT DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id              TEXT PRIMARY KEY,
     user_id         TEXT REFERENCES users(id),
@@ -219,5 +225,38 @@ async def upsert_profile_colors(user_id, bg_color, text_color, accent_color, lin
                    accent_color = excluded.accent_color,
                    link_color = excluded.link_color""",
             (user_id, bg_color, text_color, accent_color, link_color),
+        )
+        await conn.commit()
+
+
+# --- Profile Settings ---
+
+_SETTINGS_DEFAULTS = {
+    'linktree_override': 0,
+    'linktree_url': '',
+}
+
+
+async def get_profile_settings(user_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM profile_settings WHERE user_id = ?", (user_id,)
+        )
+        row = await cursor.fetchone()
+    if row:
+        return {k: row[k] for k in _SETTINGS_DEFAULTS}
+    return dict(_SETTINGS_DEFAULTS)
+
+
+async def upsert_profile_settings(user_id, linktree_override, linktree_url):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            """INSERT INTO profile_settings (user_id, linktree_override, linktree_url)
+               VALUES (?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                   linktree_override = excluded.linktree_override,
+                   linktree_url = excluded.linktree_url""",
+            (user_id, int(linktree_override), linktree_url),
         )
         await conn.commit()

@@ -63,23 +63,25 @@ def dashboard_nav(active='dashboard'):
             ).props(f'flat round').style(f'color: {color};')
 
 
-def dashboard_header(moniker, member_type, stellar_address=None):
+def dashboard_header(moniker, member_type, user_id=None,
+                     override_enabled=False, override_url=''):
     """Shared profile header for dashboard views."""
-    import config
     moniker_slug = moniker.lower().replace(' ', '-')
     with ui.header(
     ).classes(
-        'text-black justify-center items-center bg-gradient-to-r from-[#f2d894] to-[#d6a5e2]'
+        'text-black justify-start items-center bg-gradient-to-r from-[#f2d894] to-[#d6a5e2] pl-6'
     ).style('position: relative;'):
         # Top-right icon buttons
-        with ui.row().classes('absolute top-2 right-4 gap-1'):
+        with ui.row().classes('absolute top-2 right-4 gap-1 items-center'):
             ui.button(
-                icon='visibility',
+                'PREVIEW',
                 on_click=lambda: ui.navigate.to(f'/profile/{moniker_slug}'),
-            ).props('flat round size=sm').classes('text-black opacity-70')
+            ).props('flat dense rounded size=sm no-caps').classes(
+                'bg-white/50 text-black text-xs px-3'
+            )
             ui.button(
                 on_click=lambda: ui.navigate.to('/launch'),
-            ).props('flat round size=sm').classes('text-black opacity-70').style(
+            ).props('flat round size=sm').classes('opacity-90').style(
                 "background-image: url('/static/pintheon_logo.png');"
                 "background-size: 24px 24px;"
                 "background-repeat: no-repeat;"
@@ -90,22 +92,38 @@ def dashboard_header(moniker, member_type, stellar_address=None):
                 on_click=lambda: ui.navigate.to('/settings'),
             ).props('flat round size=sm').classes('text-black opacity-70')
 
-        ui.image('/static/placeholder.png').classes('w-[20vw] h-[20vw] rounded-full m-8 shadow-md')
-        with ui.column().classes('h-50 flex justify-between w-[50vw]'):
-            with ui.column():
-                ui.label(moniker.upper()).classes('text-5xl font-medium font-bold')
-                badge_text = 'COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER'
-                with ui.element('div').classes(
-                    'bg-[#ffde59] px-4 py-2 rounded-lg shadow-md'
-                ).style('display: inline-block; width: fit-content;'):
-                    ui.label(badge_text).classes('text-sm font-bold')
+        ui.image('/static/placeholder.png').classes('w-[8vw] h-[8vw] rounded-full my-3 ml-6 shadow-md')
+        with ui.column().classes('gap-1 py-2'):
+            ui.label(moniker).classes('text-2xl font-bold')
+            badge_text = 'COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER'
+            with ui.element('div').classes(
+                'bg-[#ffde59] px-3 py-1 rounded-lg shadow-md'
+            ).style('display: inline-block; width: fit-content;'):
+                ui.label(badge_text).classes('text-xs font-bold')
 
-            if stellar_address:
-                with ui.row().classes('items-center gap-1'):
-                    ui.icon('chevron_right').classes('text-lg')
-                    short = f"{stellar_address[:6]}...{stellar_address[-4:]}"
-                    explorer_url = f"{config.BLOCK_EXPLORER}/account/{stellar_address}"
-                    ui.link(short, explorer_url, new_tab=True).classes('text-[#8c52ff] font-semibold text-lg')
+            # Override linktree row
+            with ui.row().classes('items-center gap-2 mt-1'):
+                ui.image('/static/pintheon_logo.png').classes('w-5 h-5')
+                ui.label('override linktree').classes('text-xs opacity-70')
+                override_toggle = ui.switch('', value=bool(override_enabled)).props('dense')
+                override_input = ui.input(
+                    placeholder='https://your-site.com',
+                    value=override_url or '',
+                ).props('outlined dense').classes('text-xs').style('min-width: 200px;')
+                override_input.bind_visibility_from(override_toggle, 'value')
+
+            if user_id:
+                import db as _db
+
+                async def _save_override():
+                    await _db.upsert_profile_settings(
+                        user_id,
+                        linktree_override=int(override_toggle.value),
+                        linktree_url=override_input.value.strip(),
+                    )
+
+                override_toggle.on_value_change(lambda: _save_override())
+                override_input.on('change', lambda e: _save_override())
 
 
 def _logout():
