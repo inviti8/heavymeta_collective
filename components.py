@@ -60,7 +60,7 @@ def dashboard_nav(active='dashboard'):
             ui.button(
                 icon=icon,
                 on_click=lambda r=route: ui.navigate.to(r),
-            ).props(f'flat round').style(f'color: {color};')
+            ).props(f'flat round').style(f'color: {color}; font-size: 26px;')
 
 
 def dashboard_header(moniker, member_type, user_id=None,
@@ -73,25 +73,28 @@ def dashboard_header(moniker, member_type, user_id=None,
         'text-black justify-start items-center bg-gradient-to-r from-[#f2d894] to-[#d6a5e2] pl-6'
     ).style('position: relative;'):
         # Top-right icon buttons
-        with ui.row().classes('absolute top-2 right-4 gap-1 items-center'):
+        with ui.row().classes('absolute top-2 right-4 gap-2 items-center'):
             ui.button(
                 'PREVIEW',
                 on_click=lambda: ui.navigate.to(f'/profile/{moniker_slug}'),
-            ).props('flat dense rounded size=sm no-caps').classes(
-                'bg-white/50 text-black text-xs px-3'
-            )
+            ).props('flat dense rounded no-caps').classes(
+                'bg-white/50 text-black px-5 py-2'
+            ).style('font-size: 16px;')
             ui.button(
                 on_click=lambda: ui.navigate.to('/launch'),
-            ).props('flat round size=sm').classes('opacity-90').style(
+            ).props('flat round').classes('opacity-90').style(
                 "background-image: url('/static/pintheon_logo.png');"
-                "background-size: 24px 24px;"
+                "background-size: 40px 40px;"
                 "background-repeat: no-repeat;"
                 "background-position: center;"
+                "font-size: 18px;"
             )
             ui.button(
                 icon='settings',
                 on_click=lambda: ui.navigate.to('/settings'),
-            ).props('flat round size=sm').classes('text-black opacity-70')
+            ).props('flat round').classes('text-black opacity-70').style(
+                'font-size: 18px;'
+            )
 
         ui.image('/static/placeholder.png').classes('w-[8vw] h-[8vw] rounded-full my-3 ml-6 shadow-md')
         with ui.column().classes('gap-1 py-2'):
