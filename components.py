@@ -67,6 +67,7 @@ def dashboard_header(moniker, member_type, user_id=None,
                      override_enabled=False, override_url=''):
     """Shared profile header for dashboard views."""
     moniker_slug = moniker.lower().replace(' ', '-')
+    ui.add_head_html('<style>.q-page-container { padding-top: 0 !important; }</style>')
     with ui.header(
     ).classes(
         'text-black justify-start items-center bg-gradient-to-r from-[#f2d894] to-[#d6a5e2] pl-6'

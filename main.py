@@ -382,7 +382,7 @@ async def profile():
                      override_enabled=bool(psettings['linktree_override']),
                      override_url=psettings['linktree_url'])
 
-    with ui.column().classes('w-full items-center gap-8 mt-1 pb-24'):
+    with ui.column().classes('w-full items-center gap-4 pb-24'):
         # Upgrade CTA for free users
         if member_type == 'free':
             with ui.card().classes('w-[75vw] bg-gradient-to-r from-purple-100 to-yellow-100'):
@@ -515,7 +515,7 @@ async def card_editor():
                      override_enabled=bool(psettings['linktree_override']),
                      override_url=psettings['linktree_url'])
 
-    with ui.column().classes('w-full items-center gap-8 mt-1 pb-24'):
+    with ui.column().classes('w-full items-center gap-4 pb-24'):
         with ui.column().classes('w-[75vw] gap-4'):
             # Editor tabs
             with ui.row().classes('gap-2'):
@@ -554,7 +554,7 @@ async def card_case():
                      override_enabled=bool(psettings['linktree_override']),
                      override_url=psettings['linktree_url'])
 
-    with ui.column().classes('w-full items-center gap-8 mt-1 pb-24'):
+    with ui.column().classes('w-full items-center gap-4 pb-24'):
         with ui.column().classes('w-[75vw] gap-4'):
             ui.label('CARD CASE').classes('text-3xl font-bold')
             ui.label('Collect virtual cards from other Heavymeta members.').classes('text-sm opacity-70')
@@ -599,7 +599,7 @@ async def settings():
 
     colors = await db.get_profile_colors(user_id)
 
-    with ui.column().classes('w-full items-center gap-8 mt-1 pb-24'):
+    with ui.column().classes('w-full items-center gap-4 pb-24'):
         with ui.column().classes('w-[75vw] gap-6'):
             ui.label('COLOR SETTINGS').classes('text-3xl font-bold')
             ui.label('Customize the colors on your public profile.').classes('text-sm opacity-70')
