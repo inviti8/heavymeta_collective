@@ -7,6 +7,7 @@ import qrcode
 from qrcode.image.styledpil import StyledPilImage
 from qrcode.image.styles.moduledrawers.pil import RoundedModuleDrawer
 from qrcode.image.styles.colormasks import SolidFillColorMask
+from PIL import Image, ImageDraw, ImageFont
 
 
 PLACEHOLDER = os.path.join(os.path.dirname(__file__), 'static', 'placeholder.png')
@@ -170,5 +171,57 @@ async def regenerate_all_link_qrs(user_id: str):
             png_bytes = generate_user_qr(link['url'], avatar_path, fg, bg)
             new_cid = await ipfs_client.ipfs_add(png_bytes, 'link_qr.png')
             await _db.update_link(link['id'], qr_cid=new_cid)
+    finally:
+        _cleanup_avatar(user, avatar_path)
+
+
+def generate_denom_qr(url: str, avatar_path: str, denomination: int,
+                      fg_hex: str = '#8c52ff',
+                      bg_hex: str = '#ffffff') -> bytes:
+    """Generate branded QR with avatar + denomination badge."""
+    base_png = generate_user_qr(url, avatar_path, fg_hex, bg_hex)
+    img = Image.open(io.BytesIO(base_png)).convert('RGBA')
+
+    w, h = img.size
+    badge_size = int(w * 0.18)
+    margin = int(w * 0.03)
+    cx = w - margin - badge_size // 2
+    cy = h - margin - badge_size // 2
+
+    draw = ImageDraw.Draw(img)
+    r = badge_size // 2
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=hex_to_rgb(fg_hex))
+
+    text = str(denomination)
+    font_size = int(badge_size * 0.55)
+    try:
+        font = ImageFont.truetype("arialbd.ttf", font_size)
+    except OSError:
+        font = ImageFont.load_default(font_size)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text((cx - tw // 2, cy - th // 2), text, fill=(255, 255, 255), font=font)
+
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return buf.getvalue()
+
+
+async def generate_denom_wallet_qr(user_id: str, wallet_id: str, pay_uri: str,
+                                    denomination: int):
+    """Generate branded denom QR, pin to IPFS, update DB."""
+    import ipfs_client
+    import db as _db
+
+    style = await _load_qr_style(user_id)
+    if not style:
+        return None
+    fg, bg, avatar_path, user = style
+
+    try:
+        png_bytes = generate_denom_qr(pay_uri, avatar_path, denomination, fg, bg)
+        new_cid = await ipfs_client.ipfs_add(png_bytes, 'denom_qr.png')
+        await _db.update_denom_wallet(wallet_id, qr_cid=new_cid)
+        return new_cid
     finally:
         _cleanup_avatar(user, avatar_path)

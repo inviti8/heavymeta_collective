@@ -1,7 +1,7 @@
 import time as _time
 
 from nicegui import ui
-from config import KUBO_GATEWAY, BLOCK_EXPLORER
+from config import KUBO_GATEWAY
 
 
 def open_qr_dialog(qr_url: str):
@@ -75,15 +75,6 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
         )
         ui.label(moniker).classes('text-3xl font-bold mt-4').style(f'color: {txt};')
 
-        stellar_wallet = next(
-            (w for w in wallets if w['network'] == 'stellar'), None
-        )
-        if stellar_wallet:
-            addr = stellar_wallet['address']
-            short = f"{addr[:6]}...{addr[-4:]}"
-            ui.link(
-                short, f'{BLOCK_EXPLORER}/account/{addr}', new_tab=True
-            ).classes('font-semibold text-sm').style(f'color: {lnk};')
 
     with ui.column().classes('w-full items-center gap-8 mt-8').style(
         'padding-inline: clamp(1rem, 25vw, 50rem);'
@@ -109,24 +100,41 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
                             link['label'], link['url'], new_tab=True
                         ).classes('font-semibold text-lg').style(f'color: {lnk};')
 
-        if wallets:
+        denom_wallets = [w for w in wallets if w.get('type') == 'denomination']
+
+        if denom_wallets:
             with ui.column().classes('w-full gap-2 p-4 rounded-lg').style(
                 f'border: 1px solid {bdr};'
             ):
                 ui.label('WALLETS').classes('text-lg font-bold').style(f'color: {txt};')
-                for wallet in wallets:
-                    with ui.row().classes('items-center gap-2 w-full'):
-                        ui.image('/static/placeholder.png').classes(
-                            'rounded-full w-8 h-8'
+                for dw in denom_wallets:
+                    qr_cid = dw.get('qr_cid')
+                    qr_url = (f'{KUBO_GATEWAY}/ipfs/{qr_cid}'
+                              if qr_cid else '/static/placeholder.png')
+                    addr = dw['address']
+                    denom = dw['denomination']
+                    pay_uri = f"web+stellar:pay?destination={addr}&amount={denom}&asset_code=XLM"
+                    short_addr = f'{addr[:6]}...{addr[-4:]}'
+
+                    with ui.row().classes(
+                        'items-center py-2 px-4 rounded-full w-full gap-3'
+                    ).style(f'border: 1px solid {bdr};'):
+                        qr_img = ui.image(qr_url).classes(
+                            'rounded w-8 h-8 cursor-pointer'
                         )
-                        ui.label(wallet['address']).classes(
-                            'text-sm font-mono break-all flex-1'
-                        )
+                        if qr_cid:
+                            qr_img.on('click', lambda u=qr_url: open_qr_dialog(u))
+                        ui.label(f'{denom} XLM').classes(
+                            'font-bold text-sm'
+                        ).style(f'color: {txt}; min-width: 60px;')
+                        ui.label(short_addr).classes(
+                            'text-sm font-mono opacity-70 flex-1'
+                        ).style(f'color: {txt};')
                         ui.button(
                             icon='content_copy',
-                            on_click=lambda a=wallet['address']:
+                            on_click=lambda u=pay_uri:
                                 ui.run_javascript(
-                                    f"navigator.clipboard.writeText('{a}')"
+                                    f"navigator.clipboard.writeText('{u}')"
                                 ),
                         ).props('flat dense size=sm').style(f'color: {txt} !important;')
 

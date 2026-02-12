@@ -63,3 +63,7 @@ CONTRACTS = {
 # --- IPFS/Kubo ---
 KUBO_API = os.getenv("KUBO_API", "http://127.0.0.1:5001/api/v0")
 KUBO_GATEWAY = os.getenv("KUBO_GATEWAY", "http://127.0.0.1:8081")
+
+# --- Denomination Wallets ---
+DENOM_PRESETS = [1, 2, 3, 5, 8, 13, 21]
+DENOM_FEE_PERCENT = 3  # Collective fee on each denom payment

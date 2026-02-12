@@ -16,6 +16,8 @@ from auth_dialog import open_auth_dialog
 from launch import generate_launch_credentials
 import ipfs_client
 from qr_gen import regenerate_qr, generate_link_qr, regenerate_all_link_qrs
+from wallet_ops import create_denom_wallet_for_user, build_pay_uri
+from config import DENOM_PRESETS
 from linktree_renderer import render_linktree
 from theme import apply_theme, load_and_apply_theme, resolve_active_palette
 import json
@@ -348,7 +350,7 @@ async def profile():
 
                     ui.button(icon='add', on_click=add_link).props(
                         'round outline dense size=sm'
-                    ).classes('text-black')
+                    ).style('color: var(--hm-text);')
                     add_label = ui.input('Label').props('outlined dense rounded').classes('w-28')
                     add_url = ui.input('URL').props('outlined dense rounded').classes('flex-1')
 
@@ -413,12 +415,88 @@ async def profile():
 
         # Wallets section (coop only)
         if member_type == 'coop':
-            with ui.column().classes('w-[75vw] gap-1 border p-4 rounded-lg'):
+            with ui.column().classes('w-[75vw] gap-2 border p-4 rounded-lg'):
                 ui.label('WALLETS').classes('text-2xl font-bold')
-                if user and user['stellar_address']:
-                    with ui.row().classes('items-center gap-2 w-full'):
-                        ui.image('/static/placeholder.png').classes('rounded-full w-8 h-8')
-                        ui.label(f"{user['stellar_address']}").classes('text-sm font-mono break-all flex-1')
+
+                @ui.refreshable
+                async def wallets_section():
+                    wallets = await db.get_denom_wallets(user_id)
+                    for w in wallets:
+                        w = dict(w)
+                        wallet_id = w['id']
+                        denom = w['denomination']
+                        addr = w['stellar_address']
+                        qr_cid = w.get('qr_cid')
+                        pay_uri = build_pay_uri(addr, denom)
+                        qr_url = (f'{config.KUBO_GATEWAY}/ipfs/{qr_cid}'
+                                  if qr_cid else '/static/placeholder.png')
+
+                        with ui.row().classes(
+                            'items-center py-2 px-4 rounded-full w-full gap-3'
+                        ):
+                            qr_img = ui.image(qr_url).classes('rounded w-8 h-8 cursor-pointer')
+                            if qr_cid:
+                                qr_img.on('click', lambda u=qr_url: _open_qr_dialog(u))
+                            ui.label(f'{denom} XLM').classes('font-bold text-sm').style(
+                                'min-width: 60px;'
+                            )
+                            short_addr = f'{addr[:6]}...{addr[-4:]}'
+                            ui.label(short_addr).classes('text-sm font-mono opacity-70 flex-1')
+                            ui.button(
+                                icon='content_copy',
+                                on_click=lambda u=pay_uri: ui.run_javascript(
+                                    f"navigator.clipboard.writeText('{u}')"
+                                ),
+                            ).props('flat dense size=sm')
+                            ui.button(
+                                icon='delete',
+                                on_click=lambda wid=wallet_id: confirm_delete_wallet(wid),
+                            ).props('flat dense size=sm color=red')
+
+                    # Add wallet row: + button + denom chip selector
+                    with ui.row().classes('items-center w-full gap-2'):
+                        denom_select = ui.toggle(
+                            {d: str(d) for d in DENOM_PRESETS}, value=DENOM_PRESETS[0]
+                        ).props('dense no-caps size=sm')
+
+                        async def add_wallet():
+                            denom = denom_select.value
+                            await create_denom_wallet_for_user(user_id, denom)
+                            ipfs_client.schedule_republish(user_id)
+                            wallets_section.refresh()
+
+                        ui.button(icon='add', on_click=add_wallet).props(
+                            'round outline dense size=sm'
+                        ).style('color: var(--hm-text);')
+
+                await wallets_section()
+
+                # QR dialog helper
+                def _open_qr_dialog(qr_url):
+                    with ui.dialog() as dlg, ui.card().classes(
+                        'items-center p-6'
+                    ).style('background-color: #1a1a2e; border-radius: 16px;'):
+                        ui.image(qr_url).classes('w-64 h-64 rounded-lg')
+                    dlg.open()
+
+                # Delete confirmation
+                async def confirm_delete_wallet(wallet_id):
+                    with ui.dialog() as dialog, ui.card().classes('p-4 gap-4'):
+                        ui.label('Delete this wallet?').classes('text-lg')
+                        with ui.row().classes('justify-end gap-2'):
+                            ui.button('Cancel', on_click=dialog.close).props('flat')
+
+                            async def do_delete():
+                                w = await db.get_denom_wallet_by_id(wallet_id)
+                                if w and dict(w).get('qr_cid'):
+                                    await ipfs_client.ipfs_unpin(dict(w)['qr_cid'])
+                                await db.discard_denom_wallet(wallet_id)
+                                ipfs_client.schedule_republish(user_id)
+                                dialog.close()
+                                wallets_section.refresh()
+
+                            ui.button('Delete', on_click=do_delete).props('color=red')
+                    dialog.open()
 
     dashboard_nav(active='dashboard')
 

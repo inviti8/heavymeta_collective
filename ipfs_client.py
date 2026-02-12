@@ -168,7 +168,8 @@ _DEFAULT_COLORS = {
 def build_linktree_json(*, moniker, member_type, stellar_address=None,
                         links=None, colors=None, avatar_cid=None,
                         card_design_cid=None, qr_code_cid=None,
-                        override_url="", settings=None):
+                        override_url="", settings=None,
+                        denom_wallets=None):
     """Assemble schema v1 linktree JSON from current data.
 
     Args:
@@ -226,6 +227,14 @@ def build_linktree_json(*, moniker, member_type, stellar_address=None,
     wallets = []
     if stellar_address:
         wallets.append({"network": "stellar", "address": stellar_address})
+    for dw in (denom_wallets or []):
+        wallets.append({
+            "network": "stellar",
+            "type": "denomination",
+            "denomination": dw["denomination"],
+            "address": dw["stellar_address"],
+            "qr_cid": dw.get("qr_cid"),
+        })
 
     # Override URL from settings if present
     if settings and settings.get("linktree_override") and settings.get("linktree_url"):
@@ -264,6 +273,7 @@ async def build_linktree_fresh(user_id: str) -> dict:
     links = await _db.get_links(user_id)
     colors = await _db.get_profile_colors(user_id)
     settings = await _db.get_profile_settings(user_id)
+    denom_rows = await _db.get_denom_wallets(user_id)
 
     return build_linktree_json(
         moniker=user['moniker'],
@@ -275,6 +285,7 @@ async def build_linktree_fresh(user_id: str) -> dict:
         card_design_cid=dict(user).get('nfc_image_cid'),
         qr_code_cid=dict(user).get('qr_code_cid'),
         settings=settings,
+        denom_wallets=[dict(dw) for dw in denom_rows],
     )
 
 
@@ -293,6 +304,7 @@ async def republish_linktree(user_id: str) -> str | None:
     links = await _db.get_links(user_id)
     colors = await _db.get_profile_colors(user_id)
     settings = await _db.get_profile_settings(user_id)
+    denom_rows = await _db.get_denom_wallets(user_id)
 
     linktree = build_linktree_json(
         moniker=user['moniker'],
@@ -304,6 +316,7 @@ async def republish_linktree(user_id: str) -> str | None:
         card_design_cid=dict(user).get('nfc_image_cid'),
         qr_code_cid=dict(user).get('qr_code_cid'),
         settings=settings,
+        denom_wallets=[dict(dw) for dw in denom_rows],
     )
 
     try:

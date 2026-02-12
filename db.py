@@ -69,6 +69,22 @@ CREATE TABLE IF NOT EXISTS payments (
     status          TEXT DEFAULT 'pending',
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS denom_wallets (
+    id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL REFERENCES users(id),
+    denomination    INTEGER NOT NULL,
+    stellar_address TEXT NOT NULL,
+    token           TEXT NOT NULL,
+    qr_cid          TEXT,
+    status          TEXT DEFAULT 'active',
+    sort_order      INTEGER DEFAULT 0,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    spent_at        TIMESTAMP,
+    merge_hash      TEXT,
+    payout_hash     TEXT,
+    fee_xlm         REAL
+);
 """
 
 
@@ -392,3 +408,77 @@ async def get_peer_cards(owner_id):
             (owner_id,),
         )
         return await cursor.fetchall()
+
+
+# --- Denomination Wallets ---
+
+async def create_denom_wallet(*, user_id, denomination, stellar_address, token):
+    wid = str(uuid.uuid4())
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            """INSERT INTO denom_wallets
+               (id, user_id, denomination, stellar_address, token)
+               VALUES (?, ?, ?, ?, ?)""",
+            (wid, user_id, denomination, stellar_address, token),
+        )
+        await conn.commit()
+    return wid
+
+
+async def get_denom_wallets(user_id, status='active'):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM denom_wallets WHERE user_id = ? AND status = ? ORDER BY sort_order",
+            (user_id, status),
+        )
+        return await cursor.fetchall()
+
+
+async def get_denom_wallet_by_id(wallet_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM denom_wallets WHERE id = ?", (wallet_id,)
+        )
+        return await cursor.fetchone()
+
+
+async def get_all_active_denom_wallets():
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM denom_wallets WHERE status = 'active'"
+        )
+        return await cursor.fetchall()
+
+
+async def mark_denom_spent(wallet_id, *, merge_hash, payout_hash, fee_xlm):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            """UPDATE denom_wallets
+               SET status = 'spent', spent_at = CURRENT_TIMESTAMP,
+                   merge_hash = ?, payout_hash = ?, fee_xlm = ?
+               WHERE id = ?""",
+            (merge_hash, payout_hash, fee_xlm, wallet_id),
+        )
+        await conn.commit()
+
+
+async def update_denom_wallet(wallet_id, **fields):
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [wallet_id]
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(f"UPDATE denom_wallets SET {set_clause} WHERE id = ?", values)
+        await conn.commit()
+
+
+async def discard_denom_wallet(wallet_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            "UPDATE denom_wallets SET status = 'discarded' WHERE id = ?",
+            (wallet_id,),
+        )
+        await conn.commit()
