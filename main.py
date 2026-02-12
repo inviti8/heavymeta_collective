@@ -448,14 +448,8 @@ async def card_editor():
                               ipns_name=user['ipns_name'])
     hide_dashboard_chrome(header)
 
-    # Three.js import map + full-viewport CSS
+    # Full-viewport CSS for 3D card scene
     ui.add_head_html('''
-    <script type="importmap">
-    { "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
-    }}
-    </script>
     <style>
       .q-page, body { background-color: transparent !important; }
       .q-layout { pointer-events: none; }
@@ -554,14 +548,8 @@ async def card_case():
                               ipns_name=user['ipns_name'])
     hide_dashboard_chrome(header)
 
-    # Three.js import map + full-viewport CSS (same as card editor)
+    # Full-viewport CSS for 3D card scene
     ui.add_head_html('''
-    <script type="importmap">
-    { "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
-    }}
-    </script>
     <style>
       .q-page, body { background-color: transparent !important; }
       .q-layout { pointer-events: none; }

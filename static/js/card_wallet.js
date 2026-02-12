@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from 'https://esm.sh/three@0.170.0';
 
 // ─── Data ──────────────────────────────────────────────────────────────────
 
