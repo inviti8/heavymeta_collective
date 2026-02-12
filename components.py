@@ -159,14 +159,16 @@ def dashboard_header(moniker, member_type, user_id=None,
 
 
 def hide_dashboard_chrome(header, footer=None):
-    """Slide the header up off-screen.
+    """Hide header and collapse its layout space.
 
-    Header is created visible (value=True). Delayed hide lets the browser
-    render the visible state first so the CSS transition animates out.
+    The header uses position:relative so it normally takes up flow space.
+    Setting display:none removes it entirely from the layout.
     """
-    ui.timer(0.05, header.hide, once=True)
+    header.set_visibility(False)
+    header.style('display: none;')
     if footer:
-        ui.timer(0.05, footer.hide, once=True)
+        footer.set_visibility(False)
+        footer.style('display: none;')
 
 
 def show_dashboard_chrome(header, footer=None):

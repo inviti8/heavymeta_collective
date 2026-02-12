@@ -544,10 +544,10 @@ async def settings():
         ('Border', 'border_color'),
     ]
 
-    with ui.column().classes('w-full items-center gap-4 pb-24'):
+    with ui.column().classes('w-full items-center gap-4 pt-2 pb-24'):
         ui.button(icon='chevron_left', on_click=lambda: ui.navigate.back()).props(
             'flat round'
-        ).classes('self-start ml-4 mt-4 opacity-70')
+        ).classes('self-start ml-4 opacity-70')
         with ui.column().classes('w-[75vw] gap-6'):
             ui.label('SETTINGS').classes('text-3xl font-bold')
             ui.label('Customize your profile theme.').classes('text-sm opacity-70')
