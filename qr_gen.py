@@ -69,14 +69,17 @@ async def get_avatar_path(avatar_cid: str | None) -> str:
     return tmp.name
 
 
-async def regenerate_qr(user_id: str):
-    """Regenerate the user's QR code image and update IPFS + DB."""
+async def _load_qr_style(user_id: str):
+    """Load user colors, avatar path, and QR style params.
+
+    Returns (fg_hex, bg_hex, avatar_path, user_dict) or None if user missing.
+    Caller must clean up avatar_path if it differs from PLACEHOLDER.
+    """
     import db as _db
-    import ipfs_client
 
     user = await _db.get_user_by_id(user_id)
     if not user:
-        return
+        return None
 
     colors = await _db.get_profile_colors(user_id)
     settings = await _db.get_profile_settings(user_id)
@@ -86,19 +89,86 @@ async def regenerate_qr(user_id: str):
     bg = colors.get('dark_bg_color' if dark else 'bg_color', '#ffffff')
 
     avatar_path = await get_avatar_path(dict(user).get('avatar_cid'))
+    return fg, bg, avatar_path, dict(user)
+
+
+def _cleanup_avatar(user_dict, avatar_path):
+    """Remove temp avatar file if it was fetched from IPFS."""
+    if user_dict.get('avatar_cid') and avatar_path != PLACEHOLDER:
+        try:
+            os.unlink(avatar_path)
+        except OSError:
+            pass
+
+
+async def regenerate_qr(user_id: str):
+    """Regenerate the user's personal QR code image and update IPFS + DB."""
+    import ipfs_client
+    import db as _db
+
+    style = await _load_qr_style(user_id)
+    if not style:
+        return
+    fg, bg, avatar_path, user = style
 
     try:
         slug = user['moniker'].lower().replace(' ', '-')
         url = f'/profile/{slug}'
 
         png_bytes = generate_user_qr(url, avatar_path, fg, bg)
-        old_cid = dict(user).get('qr_code_cid')
+        old_cid = user.get('qr_code_cid')
         new_cid = await ipfs_client.replace_asset(png_bytes, old_cid, 'qr_code.png')
         await _db.update_user(user_id, qr_code_cid=new_cid)
     finally:
-        # Clean up temp file if we fetched avatar from IPFS
-        if dict(user).get('avatar_cid') and avatar_path != PLACEHOLDER:
-            try:
-                os.unlink(avatar_path)
-            except OSError:
-                pass
+        _cleanup_avatar(user, avatar_path)
+
+
+async def generate_link_qr(user_id: str, link_id: str, url: str):
+    """Generate a branded QR code for a specific linktree URL.
+
+    Uses the same colors and avatar as the user's personal QR.
+    Pins to IPFS and updates the link_tree row with the CID.
+    Returns the new CID or None on failure.
+    """
+    import ipfs_client
+    import db as _db
+
+    style = await _load_qr_style(user_id)
+    if not style:
+        return None
+    fg, bg, avatar_path, user = style
+
+    try:
+        png_bytes = generate_user_qr(url, avatar_path, fg, bg)
+        new_cid = await ipfs_client.ipfs_add(png_bytes, 'link_qr.png')
+        await _db.update_link(link_id, qr_cid=new_cid)
+        return new_cid
+    finally:
+        _cleanup_avatar(user, avatar_path)
+
+
+async def regenerate_all_link_qrs(user_id: str):
+    """Regenerate QR codes for all of a user's links.
+
+    Called when avatar, colors, or dark mode change.
+    """
+    import ipfs_client
+    import db as _db
+
+    style = await _load_qr_style(user_id)
+    if not style:
+        return
+    fg, bg, avatar_path, user = style
+
+    try:
+        links = await _db.get_links(user_id)
+        for link in links:
+            link = dict(link)
+            old_cid = link.get('qr_cid')
+            if old_cid:
+                await ipfs_client.ipfs_unpin(old_cid)
+            png_bytes = generate_user_qr(link['url'], avatar_path, fg, bg)
+            new_cid = await ipfs_client.ipfs_add(png_bytes, 'link_qr.png')
+            await _db.update_link(link['id'], qr_cid=new_cid)
+    finally:
+        _cleanup_avatar(user, avatar_path)

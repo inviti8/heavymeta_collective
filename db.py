@@ -100,6 +100,8 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN avatar_cid TEXT",
             # QR code
             "ALTER TABLE users ADD COLUMN qr_code_cid TEXT",
+            # Per-link QR codes
+            "ALTER TABLE link_tree ADD COLUMN qr_cid TEXT",
         ]
         for sql in migrations:
             try:
@@ -257,6 +259,15 @@ async def delete_link(link_id):
     async with aiosqlite.connect(DATABASE_PATH) as conn:
         await conn.execute("DELETE FROM link_tree WHERE id = ?", (link_id,))
         await conn.commit()
+
+
+async def get_link_by_id(link_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM link_tree WHERE id = ?", (link_id,)
+        )
+        return await cursor.fetchone()
 
 
 # --- Profile Colors ---

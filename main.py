@@ -15,7 +15,7 @@ from payments.stripe_pay import handle_webhook, retrieve_checkout_session
 from auth_dialog import open_auth_dialog
 from launch import generate_launch_credentials
 import ipfs_client
-from qr_gen import regenerate_qr
+from qr_gen import regenerate_qr, generate_link_qr, regenerate_all_link_qrs
 from linktree_renderer import render_linktree
 from theme import apply_theme, load_and_apply_theme, resolve_active_palette
 import json
@@ -238,11 +238,15 @@ async def profile():
 
     user_id = app.storage.user.get('user_id')
     user = await db.get_user_by_id(user_id)
-    moniker = user['moniker'] if user else app.storage.user.get('moniker', 'Unknown')
+    if not user:
+        app.storage.user.clear()
+        ui.navigate.to('/login')
+        return
+    moniker = user['moniker']
     member_type = app.storage.user.get('member_type', 'free')
     psettings = await db.get_profile_settings(user_id)
 
-    avatar_cid = dict(user).get('avatar_cid') if user else None
+    avatar_cid = dict(user).get('avatar_cid')
     header = dashboard_header(moniker, member_type, user_id=user_id,
                               override_enabled=bool(psettings['linktree_override']),
                               override_url=psettings['linktree_url'],
@@ -273,6 +277,8 @@ async def profile():
             old_cid = user_row['avatar_cid'] if user_row else None
             new_cid = await ipfs_client.replace_asset(img_bytes, old_cid, 'avatar.png')
             await db.update_user(user_id, avatar_cid=new_cid)
+            await regenerate_qr(user_id)
+            await regenerate_all_link_qrs(user_id)
             ipfs_client.schedule_republish(user_id)
             ui.notify('Avatar updated', type='positive')
         except Exception as e:
@@ -304,9 +310,11 @@ async def profile():
                         with ui.row().classes(
                             'items-center bg-gray-100 py-2 px-4 rounded-full w-full gap-3'
                         ):
-                            ui.image(
-                                link['icon_url'] or '/static/placeholder.png'
-                            ).classes('rounded-full w-8 h-8')
+                            qr_cid = dict(link).get('qr_cid')
+                            qr_thumb = (f'{config.KUBO_GATEWAY}/ipfs/{qr_cid}'
+                                        if qr_cid else
+                                        link['icon_url'] or '/static/placeholder.png')
+                            ui.image(qr_thumb).classes('rounded w-8 h-8')
                             ui.label(link['label']).classes(
                                 'font-semibold text-sm'
                             ).style('min-width: 100px;')
@@ -326,11 +334,13 @@ async def profile():
                 with ui.row().classes('items-center w-full gap-2'):
                     async def add_link():
                         if add_label.value and add_url.value:
-                            await db.create_link(
+                            url_val = add_url.value.strip()
+                            link_id = await db.create_link(
                                 user_id=user_id,
                                 label=add_label.value.strip(),
-                                url=add_url.value.strip(),
+                                url=url_val,
                             )
+                            await generate_link_qr(user_id, link_id, url_val)
                             ipfs_client.schedule_republish(user_id)
                             add_label.value = ''
                             add_url.value = ''
@@ -362,10 +372,17 @@ async def profile():
 
                         async def save_edit():
                             if edit_label.value and edit_url.value:
+                                new_url = edit_url.value.strip()
+                                # Regenerate QR if URL changed
+                                if new_url != current_url:
+                                    old_link = await db.get_link_by_id(link_id)
+                                    if old_link and dict(old_link).get('qr_cid'):
+                                        await ipfs_client.ipfs_unpin(dict(old_link)['qr_cid'])
+                                    await generate_link_qr(user_id, link_id, new_url)
                                 await db.update_link(
                                     link_id,
                                     label=edit_label.value.strip(),
-                                    url=edit_url.value.strip(),
+                                    url=new_url,
                                 )
                                 ipfs_client.schedule_republish(user_id)
                                 dialog.close()
@@ -382,6 +399,10 @@ async def profile():
                         ui.button('Cancel', on_click=dialog.close).props('flat')
 
                         async def do_delete():
+                            # Unpin QR before deleting
+                            old_link = await db.get_link_by_id(link_id)
+                            if old_link and dict(old_link).get('qr_cid'):
+                                await ipfs_client.ipfs_unpin(dict(old_link)['qr_cid'])
                             await db.delete_link(link_id)
                             ipfs_client.schedule_republish(user_id)
                             dialog.close()
@@ -795,6 +816,8 @@ async def settings():
                     linktree_url=psettings['linktree_url'],
                     dark_mode=int(mode_toggle.value),
                 )
+                await regenerate_qr(user_id)
+                await regenerate_all_link_qrs(user_id)
                 ipfs_client.schedule_republish(user_id)
                 save_label.text = 'Settings saved!'
                 save_label.set_visibility(True)

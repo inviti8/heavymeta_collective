@@ -1,5 +1,17 @@
+import time as _time
+
 from nicegui import ui
 from config import KUBO_GATEWAY, BLOCK_EXPLORER
+
+
+def open_qr_dialog(qr_url: str):
+    """Open a dialog showing the QR code image."""
+    with ui.dialog() as dialog, ui.card().classes(
+        'items-center p-6'
+    ).style('background-color: #1a1a2e; border-radius: 16px;'):
+        ui.image(qr_url).classes('w-64 h-64 rounded-lg')
+
+    dialog.open()
 
 
 def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
@@ -40,9 +52,11 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
     ''')
 
     if is_preview:
-        ui.button(icon='chevron_left', on_click=lambda: ui.navigate.back()).props(
+        ui.button(icon='chevron_left', on_click=lambda: ui.navigate.to('/profile/edit')).props(
             'flat round'
-        ).classes('absolute top-2 left-2 opacity-70').style(f'color: {txt};')
+        ).classes('fixed top-2 left-2 opacity-70').style(
+            f'color: {txt}; z-index: 100000;'
+        )
 
     with ui.column().classes(
         'w-full items-center py-8'
@@ -51,7 +65,6 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
         ui.element('div').classes('avatar-placeholder').style(
             'width: 8rem; height: 8rem;'
         )
-        import time as _time
         _av = int(_time.time())
         ui.add_body_html(
             f'<div id="avatar-scene" data-avatar-url="{avatar_url}"></div>'
@@ -78,13 +91,17 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
             ):
                 ui.label('LINKS').classes('text-lg font-bold').style(f'color: {txt};')
                 for link in sorted(links, key=lambda l: l.get('sort_order', 0)):
-                    icon_url = (f'{KUBO_GATEWAY}/ipfs/{link["icon_cid"]}'
-                                if link.get('icon_cid')
-                                else '/static/placeholder.png')
+                    qr_cid = link.get('qr_cid')
+                    qr_url = (f'{KUBO_GATEWAY}/ipfs/{qr_cid}'
+                              if qr_cid else '/static/placeholder.png')
                     with ui.row().classes(
                         'items-center py-2 px-4 rounded-full w-full'
                     ).style(f'border: 1px solid {bdr};'):
-                        ui.image(icon_url).classes('rounded-full w-8 h-8')
+                        qr_img = ui.image(qr_url).classes(
+                            'rounded w-8 h-8 cursor-pointer'
+                        )
+                        if qr_cid:
+                            qr_img.on('click', lambda u=qr_url: open_qr_dialog(u))
                         ui.link(
                             link['label'], link['url'], new_tab=True
                         ).classes('font-semibold text-lg').style(f'color: {lnk};')
@@ -110,9 +127,3 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
                                 ),
                         ).props('flat dense size=sm').style(f'color: {txt} !important;')
 
-    with ui.footer().classes('flex justify-center items-center py-3').style(
-        f'background-color: {acc};'
-    ):
-        ui.button(
-            icon='arrow_back', on_click=lambda: ui.navigate.to('/')
-        ).props('flat round').style(f'color: {txt} !important;')

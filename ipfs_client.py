@@ -212,6 +212,7 @@ def build_linktree_json(*, moniker, member_type, stellar_address=None,
             "label": link.get("label", "") if isinstance(link, dict) else link["label"],
             "url": link.get("url", "") if isinstance(link, dict) else link["url"],
             "icon_cid": link.get("icon_cid") or link.get("icon_url"),
+            "qr_cid": link.get("qr_cid"),
             "sort_order": link.get("sort_order", 0),
         })
 
