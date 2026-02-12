@@ -75,7 +75,7 @@ function init(container, spacer) {
 
   // ─── Circular Mesh ────────────────────────────────────────────────
 
-  const geometry = new THREE.CircleGeometry(1.15, 64);
+  const geometry = new THREE.CircleGeometry(1.035, 64);
   const material = new THREE.MeshStandardMaterial({
     color: 0x333333,
     roughness: 0.4,

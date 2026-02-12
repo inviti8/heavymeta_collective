@@ -259,17 +259,24 @@ async def profile():
         except TimeoutError:
             ui.notify('Image too large for upload. Try a smaller file.', type='warning')
             return
+        except Exception as e:
+            ui.notify(f'Could not read image data: {e}', type='warning')
+            return
         if not b64:
+            ui.notify('No image data received', type='warning')
             return
         import base64
         try:
             img_bytes = base64.b64decode(b64)
-            old_cid = dict(user).get('avatar_cid') if user else None
+            user_row = await db.get_user_by_id(user_id)
+            old_cid = user_row['avatar_cid'] if user_row else None
             new_cid = await ipfs_client.replace_asset(img_bytes, old_cid, 'avatar.png')
             await db.update_user(user_id, avatar_cid=new_cid)
             ipfs_client.schedule_republish(user_id)
             ui.notify('Avatar updated', type='positive')
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             ui.notify(f'Avatar upload failed: {e}', type='negative')
 
     ui.button(on_click=process_avatar_upload).props(

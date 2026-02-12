@@ -76,8 +76,6 @@ def dashboard_header(moniker, member_type, user_id=None,
       .q-footer { transition: transform 0.3s ease !important; }
       #avatar-scene {
         position: fixed;
-        border-radius: 50%;
-        overflow: hidden;
         z-index: 99999;
         pointer-events: auto;
       }
@@ -132,8 +130,8 @@ def dashboard_header(moniker, member_type, user_id=None,
             import config
             avatar_url = (f'{config.KUBO_GATEWAY}/ipfs/{avatar_cid}'
                           if avatar_cid else '/static/placeholder.png')
-            ui.element('div').classes('avatar-placeholder shadow-md').style(
-                'width: 8vw; height: 8vw; border-radius: 50%;'
+            ui.element('div').classes('avatar-placeholder').style(
+                'width: 8vw; height: 8vw;'
             )
             import time as _time
             _av = int(_time.time())

@@ -29,8 +29,6 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
     <style>
       #avatar-scene {
         position: fixed;
-        border-radius: 50%;
-        overflow: hidden;
         z-index: 99999;
         pointer-events: auto;
       }
@@ -46,8 +44,8 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
         'w-full items-center py-8'
     ).style(f'background: linear-gradient(to right, {acc}, {lnk});'):
         # Layout spacer — the 3D scene overlays this via fixed positioning
-        ui.element('div').classes('avatar-placeholder shadow-md').style(
-            'width: 8rem; height: 8rem; border-radius: 50%;'
+        ui.element('div').classes('avatar-placeholder').style(
+            'width: 8rem; height: 8rem;'
         )
         import time as _time
         _av = int(_time.time())
