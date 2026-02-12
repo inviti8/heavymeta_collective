@@ -110,30 +110,73 @@ function init(container) {
     });
   }
 
-  // ─── Pointer Interaction: Drag → Tilt (read-only, no upload) ──────
+  // ─── Pointer Interaction: Mouse tracking → Tilt (no click needed) ──
 
   const MAX_TILT = THREE.MathUtils.degToRad(30);
-  let isPointerDown = false;
-  let pointerStart = { x: 0, y: 0 };
+  let targetRotX = 0, targetRotY = 0;
+
+  canvas.addEventListener('pointermove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;   // -1..+1
+    const ny = -(((e.clientY - rect.top) / rect.height) * 2 - 1); // -1..+1 (inverted)
+    targetRotY = nx * MAX_TILT;
+    targetRotX = ny * MAX_TILT;
+  });
+
+  canvas.addEventListener('pointerleave', () => {
+    targetRotX = 0;
+    targetRotY = 0;
+  });
+
+  // ─── Click-and-Hold → Download QR Image ─────────────────────────────
+
+  const HOLD_MS = 500;
+  const MOVE_THRESHOLD = 3;
+  let holdTimer = null;
+  let holdStart = { x: 0, y: 0 };
+
+  function downloadQr() {
+    if (!qrUrl) return;
+    fetch(qrUrl)
+      .then(r => r.blob())
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'heavymeta-qr.png';
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch(() => {});
+  }
+
+  function cancelHold() {
+    if (holdTimer !== null) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+  }
 
   canvas.addEventListener('pointerdown', (e) => {
-    canvas.setPointerCapture(e.pointerId);
-    isPointerDown = true;
-    pointerStart = { x: e.clientX, y: e.clientY };
+    holdStart = { x: e.clientX, y: e.clientY };
+    cancelHold();
+    holdTimer = setTimeout(() => {
+      downloadQr();
+      holdTimer = null;
+    }, HOLD_MS);
   });
 
   canvas.addEventListener('pointermove', (e) => {
-    if (!isPointerDown) return;
-    const dx = e.clientX - pointerStart.x;
-    const dy = e.clientY - pointerStart.y;
-    const rect = canvas.getBoundingClientRect();
-    mesh.rotation.y = THREE.MathUtils.clamp(dx / rect.width * 2, -1, 1) * MAX_TILT;
-    mesh.rotation.x = THREE.MathUtils.clamp(-dy / rect.height * 2, -1, 1) * MAX_TILT;
+    if (holdTimer === null) return;
+    const dx = e.clientX - holdStart.x;
+    const dy = e.clientY - holdStart.y;
+    if (Math.sqrt(dx * dx + dy * dy) > MOVE_THRESHOLD) {
+      cancelHold();
+    }
   });
 
-  canvas.addEventListener('pointerup', (e) => {
-    canvas.releasePointerCapture(e.pointerId);
-    isPointerDown = false;
+  canvas.addEventListener('pointerup', () => {
+    cancelHold();
   });
 
   // ─── Render Loop ───────────────────────────────────────────────────
@@ -146,10 +189,8 @@ function init(container) {
     const dt = Math.min(clock.getDelta(), 0.05);
     const factor = 1.0 - Math.exp(-6.0 * dt);
 
-    if (!isPointerDown) {
-      mesh.rotation.x += (0 - mesh.rotation.x) * factor;
-      mesh.rotation.y += (0 - mesh.rotation.y) * factor;
-    }
+    mesh.rotation.x += (targetRotX - mesh.rotation.x) * factor;
+    mesh.rotation.y += (targetRotY - mesh.rotation.y) * factor;
 
     renderer.render(scene, camera);
   }
