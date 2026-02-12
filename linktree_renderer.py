@@ -36,9 +36,12 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
 
     ui.query('body').style(f'background-color: {bg};')
 
-    # 3D avatar scene CSS + icon color override
+    # Dark base + fade-in + 3D avatar scene CSS + icon color override
     ui.add_head_html(f'''
     <style>
+      html, body {{ background-color: #1a1a2e !important; }}
+      @keyframes fadeIn {{ from {{ opacity: 0; }} to {{ opacity: 1; }} }}
+      .nicegui-content {{ animation: fadeIn 0.25s ease-out; }}
       #avatar-scene {{
         position: fixed;
         z-index: 99999;

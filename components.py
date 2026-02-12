@@ -30,6 +30,13 @@ def user_wallet(img_src: str):
 def style_page(page_title: str):
     ui.page_title(page_title)
     ui.colors(primary='#8c52ff', secondary='#2c2f36', accent='#ffffff', neutral='#f5f5f5')
+    ui.add_head_html('''
+    <style>
+      html, body { background-color: #1a1a2e !important; }
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      .nicegui-content { animation: fadeIn 0.25s ease-out; }
+    </style>
+    ''')
     with ui.header().classes('items-center'):
         ui.button('HEAVYMETA COLLECTIVE', on_click=lambda: ui.navigate.to('/')).classes('text-lg font-semibold')
         ui.space()
@@ -72,6 +79,9 @@ def dashboard_header(moniker, member_type, user_id=None,
     moniker_slug = moniker.lower().replace(' ', '-')
     ui.add_head_html('''
     <style>
+      html, body { background-color: #1a1a2e !important; }
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      .nicegui-content { animation: fadeIn 0.25s ease-out; }
       .q-page-container { padding-top: 0 !important; }
       .q-header { transition: transform 0.3s ease !important; }
       .q-footer { transition: transform 0.3s ease !important; }
