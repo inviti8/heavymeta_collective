@@ -179,6 +179,177 @@ function init(container) {
     cancelHold();
   });
 
+  // ─── QR Scanner ────────────────────────────────────────────────────
+
+  let html5QrCode = null;
+
+  function extractMonikerSlug(text) {
+    const match = text.match(/\/profile\/([a-z0-9-]+)/i);
+    return match ? match[1].toLowerCase() : null;
+  }
+
+  // Scan button (upper-right, above 3D scene)
+  const scanBtn = document.createElement('button');
+  scanBtn.innerHTML = '<span class="material-icons" style="font-size:24px;">qr_code_scanner</span>';
+  scanBtn.style.cssText = `
+    position: fixed; top: 16px; right: 16px; z-index: 6000;
+    width: 48px; height: 48px; border-radius: 50%;
+    background: rgba(255,255,255,0.15); border: none; cursor: pointer;
+    color: white; display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(4px);
+  `;
+  document.body.appendChild(scanBtn);
+
+  // Scanner overlay
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    z-index: 7000; background: rgba(0,0,0,0.9);
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+  `;
+  overlay.innerHTML = `
+    <button id="qr-scan-close" style="
+      position: absolute; top: 16px; right: 16px;
+      width: 48px; height: 48px; border-radius: 50%;
+      background: rgba(255,255,255,0.15); border: none; cursor: pointer;
+      color: white; display: flex; align-items: center; justify-content: center;
+    "><span class="material-icons" style="font-size:24px;">close</span></button>
+    <p style="color: white; margin-bottom: 16px; font-size: 14px; opacity: 0.7;">
+      Point camera at a member's QR code
+    </p>
+    <div id="qr-reader" style="width: min(80vw, 400px);"></div>
+    <div id="qr-scan-result" style="
+      display: none; color: white; margin-top: 24px; text-align: center;
+      padding: 16px; background: rgba(255,255,255,0.1); border-radius: 12px;
+      min-width: 250px;
+    "></div>
+  `;
+  document.body.appendChild(overlay);
+
+  function openScanner() {
+    overlay.style.display = 'flex';
+    const resultDiv = document.getElementById('qr-scan-result');
+    resultDiv.style.display = 'none';
+
+    html5QrCode = new Html5Qrcode('qr-reader');
+    html5QrCode.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      onScanSuccess,
+    ).catch(() => {
+      // Camera failed — try file-based fallback
+      resultDiv.innerHTML = '<p>Camera not available. Try uploading a QR image instead.</p>';
+      resultDiv.style.display = 'block';
+    });
+  }
+
+  function closeScanner() {
+    if (html5QrCode) {
+      html5QrCode.stop().catch(() => {});
+      html5QrCode.clear();
+      html5QrCode = null;
+    }
+    overlay.style.display = 'none';
+  }
+
+  async function onScanSuccess(decodedText) {
+    // Stop scanning immediately
+    if (html5QrCode) {
+      await html5QrCode.stop().catch(() => {});
+      html5QrCode.clear();
+      html5QrCode = null;
+    }
+
+    const slug = extractMonikerSlug(decodedText);
+    const resultDiv = document.getElementById('qr-scan-result');
+
+    if (!slug) {
+      resultDiv.innerHTML = `
+        <p style="color: #ff6b6b;">Not a valid member QR code</p>
+        <button onclick="document.getElementById('qr-scan-retry').click()"
+                style="margin-top: 12px; padding: 8px 24px; border-radius: 8px;
+                       background: rgba(255,255,255,0.2); border: none;
+                       color: white; cursor: pointer;">
+          SCAN ANOTHER
+        </button>
+      `;
+      resultDiv.style.display = 'block';
+      return;
+    }
+
+    // Trigger NiceGUI bridge
+    window.__scannedPeerSlug = slug;
+    window.__peerScanResult = null;
+    document.getElementById('peer-scan-trigger').click();
+
+    resultDiv.innerHTML = '<p style="opacity: 0.7;">Looking up member...</p>';
+    resultDiv.style.display = 'block';
+
+    // Poll for result from Python handler
+    const poll = setInterval(() => {
+      if (window.__peerScanResult === null) return;
+      clearInterval(poll);
+
+      const result = window.__peerScanResult;
+      const moniker = window.__peerScanMoniker || '';
+
+      if (result === 'ok') {
+        resultDiv.innerHTML = `
+          <p style="color: #69db7c; font-size: 18px; font-weight: bold;">Peer added!</p>
+          <p style="margin-top: 8px; font-size: 16px;">${moniker}</p>
+          <div style="display: flex; gap: 12px; margin-top: 16px; justify-content: center;">
+            <button onclick="window.location.href='/card/case'"
+                    style="padding: 8px 24px; border-radius: 8px;
+                           background: rgba(140,82,255,0.6); border: none;
+                           color: white; cursor: pointer;">
+              VIEW CARDS
+            </button>
+            <button onclick="document.getElementById('qr-scan-retry').click()"
+                    style="padding: 8px 24px; border-radius: 8px;
+                           background: rgba(255,255,255,0.2); border: none;
+                           color: white; cursor: pointer;">
+              SCAN ANOTHER
+            </button>
+          </div>
+        `;
+      } else if (result === 'not_found') {
+        resultDiv.innerHTML = `
+          <p style="color: #ff6b6b;">Member not found</p>
+          <button onclick="document.getElementById('qr-scan-retry').click()"
+                  style="margin-top: 12px; padding: 8px 24px; border-radius: 8px;
+                         background: rgba(255,255,255,0.2); border: none;
+                         color: white; cursor: pointer;">
+            SCAN ANOTHER
+          </button>
+        `;
+      } else if (result === 'self') {
+        resultDiv.innerHTML = `
+          <p style="color: #ffd43b;">That's your own QR code!</p>
+          <button onclick="document.getElementById('qr-scan-retry').click()"
+                  style="margin-top: 12px; padding: 8px 24px; border-radius: 8px;
+                         background: rgba(255,255,255,0.2); border: none;
+                         color: white; cursor: pointer;">
+            SCAN ANOTHER
+          </button>
+        `;
+      }
+    }, 100);
+  }
+
+  // Hidden retry button to restart scanner
+  const retryBtn = document.createElement('button');
+  retryBtn.id = 'qr-scan-retry';
+  retryBtn.style.display = 'none';
+  retryBtn.addEventListener('click', () => {
+    const resultDiv = document.getElementById('qr-scan-result');
+    resultDiv.style.display = 'none';
+    openScanner();
+  });
+  document.body.appendChild(retryBtn);
+
+  scanBtn.addEventListener('click', openScanner);
+  document.getElementById('qr-scan-close').addEventListener('click', closeScanner);
+
   // ─── Render Loop ───────────────────────────────────────────────────
 
   const clock = new THREE.Clock();

@@ -150,6 +150,17 @@ async def get_user_by_ipns_name(ipns_name):
         return await cursor.fetchone()
 
 
+async def get_user_by_moniker_slug(slug: str):
+    """Look up user by URL-style moniker slug (lowercase, hyphens)."""
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM users WHERE LOWER(REPLACE(moniker, ' ', '-')) = ?",
+            (slug.lower(),),
+        )
+        return await cursor.fetchone()
+
+
 async def check_moniker_available(moniker):
     async with aiosqlite.connect(DATABASE_PATH) as conn:
         cursor = await conn.execute("SELECT 1 FROM users WHERE moniker = ?", (moniker,))

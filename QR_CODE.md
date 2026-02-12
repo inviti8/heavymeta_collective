@@ -449,3 +449,237 @@ async def qr_view():
 5. **`components.py`** — Add nav bar icon
 6. **`main.py`** — Add `/qr` route + regeneration triggers
 7. **Test** — Generate QR, verify scan, verify 3D view, verify regeneration on avatar/color change
+
+---
+
+## 12. Peer QR Scanning
+
+### Overview
+
+A scan button in the upper-right corner of the `/qr` view opens the device
+camera to scan another member's QR code. The scanned URL is parsed to identify
+the peer, and they are automatically added to the scanner's peer card collection
+(the card wallet at `/card/case`).
+
+### Wireframe
+
+```
+┌──────────────────────────────────────────┐
+│                              [📷 SCAN]   │  ← upper-right button
+│                                          │
+│           ┌──────────────┐               │
+│           │   QR CODE    │               │
+│           │   (3D mesh)  │               │
+│           └──────────────┘               │
+│                                          │
+│  [badge] [palette] [collections] [qr]    │
+└──────────────────────────────────────────┘
+
+        ↓ tap SCAN button
+
+┌──────────────────────────────────────────┐
+│                              [✕ CLOSE]   │
+│                                          │
+│  ┌────────────────────────────────────┐  │
+│  │                                    │  │
+│  │         CAMERA VIEWFINDER          │  │
+│  │                                    │  │
+│  │      ┌──────────────────┐          │  │
+│  │      │   scan target    │          │  │
+│  │      └──────────────────┘          │  │
+│  │                                    │  │
+│  └────────────────────────────────────┘  │
+│                                          │
+│  Point camera at a member's QR code      │
+│                                          │
+└──────────────────────────────────────────┘
+
+        ↓ QR detected
+
+┌──────────────────────────────────────────┐
+│                                          │
+│  ┌────────────────────────────────────┐  │
+│  │  ✓ Peer added!                     │  │
+│  │                                    │  │
+│  │  [avatar]  MonkerName              │  │
+│  │            COOP MEMBER             │  │
+│  │                                    │  │
+│  │  [ VIEW CARD ]  [ SCAN ANOTHER ]   │  │
+│  └────────────────────────────────────┘  │
+│                                          │
+└──────────────────────────────────────────┘
+```
+
+### QR Data Format
+
+Each member's QR encodes their profile URL path:
+
+```
+/profile/{moniker-slug}
+```
+
+The scanner extracts the `moniker-slug` from the URL and looks up the user
+in the database via the same query used in `/profile/{moniker_slug}`:
+
+```sql
+SELECT id, moniker, member_type, avatar_cid, nfc_image_cid
+FROM users
+WHERE LOWER(REPLACE(moniker, ' ', '-')) = ?
+```
+
+### Client-Side: QR Scanner
+
+**Library:** Use `html5-qrcode` (lightweight, no dependencies, works on
+mobile and desktop). Load from CDN:
+
+```html
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+```
+
+**Scanner flow in `qr_view.js`:**
+
+1. Scan button creates a `<div id="qr-reader">` overlay on top of the 3D scene
+2. Initialize `Html5Qrcode` with the reader div
+3. Start camera with `html5Qrcode.start()`
+4. On successful decode:
+   - Stop scanner
+   - Parse the URL to extract moniker slug
+   - POST to `/api/peer/add` with the slug
+5. Show result overlay (success or error)
+6. Close button returns to the 3D QR view
+
+**URL parsing:** The scanned text could be:
+- Relative path: `/profile/some-moniker`
+- Full URL: `https://example.com/profile/some-moniker`
+
+Extract the slug with:
+
+```javascript
+function extractMonikerSlug(scannedText) {
+  const match = scannedText.match(/\/profile\/([a-z0-9-]+)/i);
+  return match ? match[1].toLowerCase() : null;
+}
+```
+
+### Server-Side: Peer Add API
+
+**New FastAPI route in `main.py`:**
+
+```python
+@app.post('/api/peer/add')
+async def api_add_peer(request: Request):
+    """Add a peer by moniker slug. Called from QR scanner."""
+    data = await request.json()
+    slug = data.get('slug', '').strip().lower()
+
+    # Authenticate
+    user_id = request.session.get('user_id')  # or from app.storage
+    if not user_id:
+        raise HTTPException(status_code=401, detail='Not authenticated')
+
+    # Look up peer
+    peer = await db.get_user_by_moniker_slug(slug)
+    if not peer:
+        raise HTTPException(status_code=404, detail='Member not found')
+
+    peer_id = peer['id']
+
+    # Prevent self-peering
+    if peer_id == user_id:
+        raise HTTPException(status_code=400, detail='Cannot add yourself')
+
+    # Add peer (INSERT OR IGNORE handles duplicates)
+    await db.add_peer_card(user_id, peer_id)
+
+    return {
+        'status': 'ok',
+        'peer': {
+            'moniker': peer['moniker'],
+            'member_type': peer['member_type'],
+            'avatar_cid': peer.get('avatar_cid'),
+        },
+    }
+```
+
+### Database: New Query
+
+Add `get_user_by_moniker_slug()` to `db.py`:
+
+```python
+async def get_user_by_moniker_slug(slug: str):
+    """Look up user by URL-style moniker slug (lowercase, hyphens)."""
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM users WHERE LOWER(REPLACE(moniker, ' ', '-')) = ?",
+            (slug,),
+        )
+        return await cursor.fetchone()
+```
+
+### NiceGUI + FastAPI Session Bridge
+
+NiceGUI uses `app.storage.user` (cookie-based), not FastAPI's session
+middleware. The `/api/peer/add` route is a raw FastAPI endpoint that won't
+have access to `app.storage.user`. Two approaches:
+
+**Option A — NiceGUI bridge (recommended):** Instead of a raw API route,
+use a hidden NiceGUI button + `ui.run_javascript()` to call back from JS
+to Python. This is the same pattern used for avatar and card uploads:
+
+```javascript
+// JS: after successful QR decode
+window.__scannedPeerSlug = slug;
+document.getElementById('peer-scan-trigger').click();
+```
+
+```python
+# Python: hidden button handler
+async def process_scanned_peer():
+    slug = await ui.run_javascript('return window.__scannedPeerSlug')
+    peer = await db.get_user_by_moniker_slug(slug)
+    if not peer:
+        ui.notify('Member not found', type='warning')
+        return
+    if peer['id'] == user_id:
+        ui.notify('That\'s your own QR code!', type='info')
+        return
+    await db.add_peer_card(user_id, peer['id'])
+    ui.notify(f'Added {peer["moniker"]} to your card wallet!', type='positive')
+
+ui.button(on_click=process_scanned_peer).props(
+    'id=peer-scan-trigger').style('position:absolute;left:-9999px;')
+```
+
+**Option B — FastAPI API route:** Add a raw `/api/peer/add` endpoint and
+extract `user_id` from NiceGUI's storage cookie. More complex, less
+consistent with existing patterns.
+
+**Recommendation:** Option A — matches the avatar/card upload bridge pattern.
+
+### File Changes
+
+| File | Action | Description |
+|------|--------|-------------|
+| `static/js/qr_view.js` | **MODIFY** | Add scan button, html5-qrcode scanner overlay, URL parsing, trigger hidden button |
+| `main.py` | **MODIFY** | Add hidden peer-scan-trigger button + handler on `/qr` route |
+| `db.py` | **MODIFY** | Add `get_user_by_moniker_slug()` query |
+| `/qr` page | **MODIFY** | Load `html5-qrcode` CDN script via `ui.add_head_html()` |
+
+### Implementation Sequence
+
+1. **`db.py`** — Add `get_user_by_moniker_slug()`
+2. **`main.py`** — Add `html5-qrcode` CDN script + hidden trigger button + handler on `/qr`
+3. **`static/js/qr_view.js`** — Add scan button UI, scanner overlay, decode handler, trigger bridge
+4. **Test** — Scan QR from another device, verify peer appears in `/card/case`
+
+### Edge Cases
+
+| Scenario | Handling |
+|----------|---------|
+| Self-scan | Show "That's your own QR code!" info toast |
+| Already a peer | `INSERT OR IGNORE` — no error, show "Already in your wallet" |
+| Invalid QR (not a profile URL) | Show "Not a valid member QR code" warning |
+| Camera permission denied | Show error message, scanner stays closed |
+| No camera available (desktop) | Button still works — `html5-qrcode` shows file upload fallback |
+| Member not found in DB | Show "Member not found" warning |

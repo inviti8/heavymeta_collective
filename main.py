@@ -592,8 +592,9 @@ async def qr_view():
 
     qr_url = f'{config.KUBO_GATEWAY}/ipfs/{qr_cid}' if qr_cid else ''
 
-    # Full-viewport CSS
+    # Full-viewport CSS + html5-qrcode library
     ui.add_head_html('''
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <style>
       .q-page, body { background-color: transparent !important; }
       .q-layout { pointer-events: none; }
@@ -607,6 +608,38 @@ async def qr_view():
       }
     </style>
     ''')
+
+    # Peer scan bridge (hidden trigger — same pattern as avatar upload)
+    async def process_scanned_peer():
+        try:
+            slug = await ui.run_javascript('return window.__scannedPeerSlug', timeout=5.0)
+        except Exception:
+            ui.notify('Could not read scan data', type='warning')
+            return
+        if not slug:
+            ui.notify('No scan data received', type='warning')
+            return
+
+        peer = await db.get_user_by_moniker_slug(slug)
+        if not peer:
+            ui.notify('Member not found', type='warning')
+            await ui.run_javascript('window.__peerScanResult = "not_found"')
+            return
+        if peer['id'] == user_id:
+            ui.notify("That's your own QR code!", type='info')
+            await ui.run_javascript('window.__peerScanResult = "self"')
+            return
+
+        await db.add_peer_card(user_id, peer['id'])
+        peer_moniker = peer['moniker']
+        ui.notify(f'Added {peer_moniker} to your card wallet!', type='positive')
+        await ui.run_javascript(
+            f'window.__peerScanResult = "ok";'
+            f'window.__peerScanMoniker = {json.dumps(peer_moniker)};'
+        )
+
+    ui.button(on_click=process_scanned_peer).props(
+        'id=peer-scan-trigger').style('position:absolute;left:-9999px;')
 
     _cache_v = int(_time.time())
     ui.add_body_html(
