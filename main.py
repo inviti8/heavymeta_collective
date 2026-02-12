@@ -558,6 +558,94 @@ async def card_case():
     </style>
     ''')
 
+    # Peer scan bridge (hidden trigger — scans QR codes to add peers)
+    async def process_scanned_peer():
+        try:
+            slug = await ui.run_javascript('return window.__scannedPeerSlug', timeout=5.0)
+        except Exception:
+            ui.notify('Could not read scan data', type='warning')
+            return
+        if not slug:
+            ui.notify('No scan data received', type='warning')
+            return
+
+        peer = await db.get_user_by_moniker_slug(slug)
+        if not peer:
+            ui.notify('Member not found', type='warning')
+            await ui.run_javascript('window.__peerScanResult = "not_found"')
+            return
+        if peer['id'] == user_id:
+            ui.notify("That's your own QR code!", type='info')
+            await ui.run_javascript('window.__peerScanResult = "self"')
+            return
+
+        await db.add_peer_card(user_id, peer['id'])
+        peer_moniker = peer['moniker']
+        peer_moniker_slug = peer_moniker.lower().replace(' ', '-')
+        new_peer_data = {
+            'moniker': peer_moniker,
+            'front_url': (f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_image_cid"]}'
+                          if peer.get('nfc_image_cid') else ''),
+            'back_url': (f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_back_image_cid"]}'
+                          if peer.get('nfc_back_image_cid') else ''),
+            'linktree_url': f'/profile/{peer_moniker_slug}',
+        }
+        ui.notify(f'Added {peer_moniker} to your card wallet!', type='positive')
+        await ui.run_javascript(
+            f'window.__peerScanResult = "ok";'
+            f'window.__peerScanMoniker = {json.dumps(peer_moniker)};'
+            f'window.__newPeerData = {json.dumps(new_peer_data)};'
+        )
+
+    ui.button(on_click=process_scanned_peer).props(
+        'id=peer-scan-trigger').style('position:absolute;left:-9999px;')
+
+    # Manual add bridge (hidden trigger — opens dialog for moniker input)
+    async def open_manual_add_dialog():
+        with ui.dialog() as dlg, ui.card().classes('p-6 gap-4'):
+            ui.label('Add a peer').classes('text-lg font-semibold')
+            slug_input = ui.input(placeholder='Enter moniker (e.g. jane-doe)').props(
+                'outlined dense'
+            ).classes('w-full')
+
+            async def do_add():
+                slug = slug_input.value.strip().lower().replace(' ', '-')
+                if not slug:
+                    ui.notify('Enter a moniker', type='warning')
+                    return
+                peer = await db.get_user_by_moniker_slug(slug)
+                if not peer:
+                    ui.notify('Member not found', type='warning')
+                    return
+                if peer['id'] == user_id:
+                    ui.notify("That's you!", type='info')
+                    return
+                await db.add_peer_card(user_id, peer['id'])
+                peer_moniker = peer['moniker']
+                peer_moniker_slug = peer_moniker.lower().replace(' ', '-')
+                new_peer_data = {
+                    'moniker': peer_moniker,
+                    'front_url': (f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_image_cid"]}'
+                                  if peer.get('nfc_image_cid') else ''),
+                    'back_url': (f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_back_image_cid"]}'
+                                  if peer.get('nfc_back_image_cid') else ''),
+                    'linktree_url': f'/profile/{peer_moniker_slug}',
+                }
+                ui.notify(f'Added {peer_moniker} to your wallet!', type='positive')
+                await ui.run_javascript(
+                    f'window.__newPeerData = {json.dumps(new_peer_data)};'
+                    f'window.addPeerCard && window.addPeerCard();'
+                )
+                dlg.close()
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancel', on_click=dlg.close).props('flat')
+                ui.button('Add', on_click=do_add)
+        dlg.open()
+
+    ui.button(on_click=open_manual_add_dialog).props(
+        'id=manual-add-trigger').style('position:absolute;left:-9999px;')
+
     # Pass peer data as JSON + load wallet scene
     _cache_v = int(_time.time())
     peers_json = json.dumps(peer_data)
@@ -601,7 +689,7 @@ async def qr_view():
 
     qr_url = f'{config.KUBO_GATEWAY}/ipfs/{qr_cid}' if qr_cid else ''
 
-    # Full-viewport CSS + qr-scanner library (nimiq/qr-scanner)
+    # Full-viewport CSS for 3D QR display
     ui.add_head_html('''
     <style>
       .q-page, body { background-color: transparent !important; }
@@ -616,38 +704,6 @@ async def qr_view():
       }
     </style>
     ''')
-
-    # Peer scan bridge (hidden trigger — same pattern as avatar upload)
-    async def process_scanned_peer():
-        try:
-            slug = await ui.run_javascript('return window.__scannedPeerSlug', timeout=5.0)
-        except Exception:
-            ui.notify('Could not read scan data', type='warning')
-            return
-        if not slug:
-            ui.notify('No scan data received', type='warning')
-            return
-
-        peer = await db.get_user_by_moniker_slug(slug)
-        if not peer:
-            ui.notify('Member not found', type='warning')
-            await ui.run_javascript('window.__peerScanResult = "not_found"')
-            return
-        if peer['id'] == user_id:
-            ui.notify("That's your own QR code!", type='info')
-            await ui.run_javascript('window.__peerScanResult = "self"')
-            return
-
-        await db.add_peer_card(user_id, peer['id'])
-        peer_moniker = peer['moniker']
-        ui.notify(f'Added {peer_moniker} to your card wallet!', type='positive')
-        await ui.run_javascript(
-            f'window.__peerScanResult = "ok";'
-            f'window.__peerScanMoniker = {json.dumps(peer_moniker)};'
-        )
-
-    ui.button(on_click=process_scanned_peer).props(
-        'id=peer-scan-trigger').style('position:absolute;left:-9999px;')
 
     _cache_v = int(_time.time())
     ui.add_body_html(

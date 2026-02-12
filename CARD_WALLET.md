@@ -455,10 +455,197 @@ This avoids an external dependency and keeps the prototype simple. GSAP can be s
 
 ---
 
-## Future Enhancements (Not This Prototype)
+## Phase 2: Empty State, QR Scan & Manual Add
+
+### Overview
+
+Three changes to the card wallet:
+
+1. **Remove empty-state text** — when the wallet has no cards, show only the empty 3D viewport (dark background, footer nav). No "No cards collected yet" text.
+2. **Move QR scan into the card wallet** — the scan button currently lives in `/qr` (qr_view.js). Move it into `/card/case` so users can scan peer QR codes directly from the wallet. Remove the scan button and scanner overlay from qr_view.js (the QR view becomes display-only for your own QR code).
+3. **Add manual peer input** — a `+` button that opens a NiceGUI dialog with a text input for entering a moniker slug manually (for when QR scanning isn't available).
+
+### UI Layout
+
+Two floating action buttons in the card wallet viewport:
+
+```
+┌──────────────────────────────────┐
+│                                  │
+│     (3D card carousel or         │
+│      empty dark viewport)        │
+│                                  │
+│                      [scan] [+]  │  ← fixed, bottom-right, above footer
+│──────────────────────────────────│
+│  badge  palette  cards  qr_code  │  ← footer nav
+└──────────────────────────────────┘
+```
+
+- **Scan button**: `qr_code_scanner` material icon, same style as current (circular, translucent backdrop)
+- **+ button**: `person_add` material icon, matching style
+- Both positioned `fixed`, bottom-right, above the footer (z-index above card-scene but below scanner overlay)
+
+### Changes by File
+
+#### `card_wallet.js`
+
+**Remove empty-state text (line 10-12):**
+```javascript
+// DELETE this block:
+if (peers.length === 0) {
+  container.innerHTML = '<p style="...">No cards collected yet.</p>';
+}
+```
+
+**Add scan button + scanner overlay:**
+Move the entire QR scanner section from `qr_view.js` into `card_wallet.js`:
+- `scanBtn` creation and styling
+- `overlay` creation (camera viewfinder UI)
+- `loadQrScannerLib()`, `openScanner()`, `stopScanner()`, `closeScanner()`
+- `onScanSuccess()` with NiceGUI bridge trigger (`peer-scan-trigger`)
+- `retryBtn` for "SCAN ANOTHER" flow
+- `extractMonikerSlug()` helper
+
+Adjust scan button position so it sits above the footer nav (~`bottom: 80px; right: 16px`).
+
+After successful scan + "ok" result, instead of showing "VIEW CARDS" link, dynamically add the new card to the 3D scene:
+```javascript
+// On successful peer add, fetch new peer data and insert card
+if (result === 'ok') {
+  // Python handler sets window.__newPeerData with {moniker, front_url, back_url, linktree_url}
+  const newPeer = window.__newPeerData;
+  if (newPeer) {
+    const card = createCard(newPeer);
+    cards.push(card);
+    animateToPositions();
+  }
+}
+```
+
+**Add `+` (manual add) button:**
+Create a second floating button next to the scan button. On click, dispatch a custom event or trigger a hidden NiceGUI button that opens the dialog (same bridge pattern as scan).
+
+```javascript
+const addBtn = document.createElement('button');
+addBtn.innerHTML = '<span class="material-icons" style="font-size:24px;">person_add</span>';
+addBtn.style.cssText = `
+  position: fixed; bottom: 80px; right: 72px; z-index: 6000;
+  width: 48px; height: 48px; border-radius: 50%;
+  background: rgba(255,255,255,0.15); border: none; cursor: pointer;
+  color: white; display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px);
+`;
+document.body.appendChild(addBtn);
+
+addBtn.addEventListener('click', () => {
+  document.getElementById('manual-add-trigger').click();
+});
+```
+
+#### `qr_view.js`
+
+**Remove scanner section entirely:**
+- Delete `scanBtn`, `overlay`, `loadQrScannerLib`, `openScanner`, `stopScanner`, `closeScanner`, `onScanSuccess`, `retryBtn`, `extractMonikerSlug`
+- The QR view becomes a simple 3D display of the user's own QR code with tilt interaction and hold-to-download
+
+#### `main.py` — `/card/case` route
+
+**Add peer-scan bridge** (move from `/qr` route):
+```python
+# Peer scan bridge (hidden trigger)
+async def process_scanned_peer():
+    # ... same logic as current /qr route ...
+    # On success, also set __newPeerData for JS to pick up
+    peer_data = {
+        'moniker': peer['moniker'],
+        'front_url': f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_image_cid"]}' if peer.get('nfc_image_cid') else '',
+        'back_url': f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_back_image_cid"]}' if peer.get('nfc_back_image_cid') else '',
+        'linktree_url': f'/profile/{peer_moniker_slug}',
+    }
+    await ui.run_javascript(
+        f'window.__newPeerData = {json.dumps(peer_data)};'
+    )
+
+ui.button(on_click=process_scanned_peer).props(
+    'id=peer-scan-trigger').style('position:absolute;left:-9999px;')
+```
+
+**Add manual-add bridge:**
+```python
+async def open_manual_add_dialog():
+    with ui.dialog() as dlg, ui.card().classes('p-6 gap-4'):
+        ui.label('Add a peer').classes('text-lg font-semibold')
+        slug_input = ui.input(placeholder='Enter moniker (e.g. jane-doe)').props(
+            'outlined dense'
+        ).classes('w-full')
+
+        async def do_add():
+            slug = slug_input.value.strip().lower().replace(' ', '-')
+            if not slug:
+                ui.notify('Enter a moniker', type='warning')
+                return
+            peer = await db.get_user_by_moniker_slug(slug)
+            if not peer:
+                ui.notify('Member not found', type='warning')
+                return
+            if peer['id'] == user_id:
+                ui.notify("That's you!", type='info')
+                return
+            await db.add_peer_card(user_id, peer['id'])
+            ui.notify(f'Added {peer["moniker"]} to your wallet!', type='positive')
+            # Pass new peer data to JS for live card insert
+            peer_moniker_slug = peer['moniker'].lower().replace(' ', '-')
+            peer_data = {
+                'moniker': peer['moniker'],
+                'front_url': (f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_image_cid"]}'
+                              if peer.get('nfc_image_cid') else ''),
+                'back_url': (f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_back_image_cid"]}'
+                              if peer.get('nfc_back_image_cid') else ''),
+                'linktree_url': f'/profile/{peer_moniker_slug}',
+            }
+            await ui.run_javascript(
+                f'window.__newPeerData = {json.dumps(peer_data)};'
+                f'window.addPeerCard && window.addPeerCard();'
+            )
+            dlg.close()
+
+        with ui.row().classes('w-full justify-end gap-2'):
+            ui.button('Cancel', on_click=dlg.close).props('flat')
+            ui.button('Add', on_click=do_add)
+    dlg.open()
+
+ui.button(on_click=open_manual_add_dialog).props(
+    'id=manual-add-trigger').style('position:absolute;left:-9999px;')
+```
+
+#### `main.py` — `/qr` route
+
+**Remove scan bridge:**
+- Delete `process_scanned_peer()` function
+- Delete `peer-scan-trigger` hidden button
+- The `/qr` route only needs the QR display scene and `dashboard_nav(active='qr_code')`
+
+### Implementation Steps
+
+1. **`card_wallet.js`** — Remove empty-state text; add scan button, scanner overlay, and `+` button; add `window.addPeerCard()` function for live card insertion
+2. **`qr_view.js`** — Strip out all scanner code (scan button, overlay, bridge interaction, retry button)
+3. **`main.py` `/card/case`** — Add `process_scanned_peer` bridge (moved from `/qr`), add `open_manual_add_dialog` bridge
+4. **`main.py` `/qr`** — Remove `process_scanned_peer` bridge and hidden trigger button
+
+### Verification
+
+1. Navigate to `/card/case` with no peers — empty dark viewport, no text, scan + add buttons visible
+2. Click scan button — camera overlay opens, scans peer QR → card appears in wallet
+3. Click `+` button — dialog opens, enter moniker slug → card appears in wallet
+4. Navigate to `/qr` — no scan button visible, just QR display with tilt + hold-to-download
+5. New cards animate into the carousel immediately (no page reload needed)
+
+---
+
+## Future Enhancements
 
 - NFC tap to collect real peer cards
-- Remove card from wallet
+- Remove card from wallet (long-press or swipe)
 - Card sorting / favorites
 - GLTF card model with PBR materials (clearcoat, metalness)
 - Holographic / iridescent shader effects
