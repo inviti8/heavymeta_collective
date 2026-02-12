@@ -26,7 +26,7 @@ canvas.style.touchAction = 'none';
 // ─── Scene + Camera ────────────────────────────────────────────────────────
 
 const scene = new THREE.Scene();
-// Transparent — NiceGUI body shows through
+scene.background = new THREE.Color(0x1a1a2e);
 
 const camera = new THREE.PerspectiveCamera(
   45, window.innerWidth / window.innerHeight, 0.1, 100
@@ -195,24 +195,51 @@ canvas.addEventListener('wheel', (e) => {
   }
 }, { passive: false });
 
-// ─── Input: Click to Select / Deselect ─────────────────────────────────────
+// ─── Input: Click / Pointer-drag ───────────────────────────────────────────
 
 let pointerDownPos = { x: 0, y: 0 };
+let pointerIsDown = false;
+let carouselDragAccum = 0;
 const CLICK_THRESHOLD = 8;
+const DRAG_CYCLE_THRESHOLD = 40; // px of vertical drag to cycle one card
 
 canvas.addEventListener('pointerdown', (e) => {
-  // Capture pointer so move/up events route here even if pointer drifts
-  // (matches what OrbitControls does internally)
   canvas.setPointerCapture(e.pointerId);
-
   pointerDownPos = { x: e.clientX, y: e.clientY };
+  pointerIsDown = true;
+  carouselDragAccum = 0;
 
-  // Hold + drag detection for selected card
+  // Hold + drag-rotate detection for selected card
   if (selectedCard) {
     const hit = raycast(e.clientX, e.clientY);
     if (hit === selectedCard) {
       startHold(e);
-      startDrag(e);
+      startRotateDrag(e);
+    }
+  }
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (!pointerIsDown) return;
+
+  // Selected card: horizontal drag rotates on Y-axis
+  if (isRotateDragging && selectedCard) {
+    const dx = e.clientX - rotateDragStartX;
+    selectedCard.rotation.y = cardStartRotY + dx * 0.008;
+    if (Math.abs(dx) > 3) cancelHold();
+    return;
+  }
+
+  // No selection: vertical pointer-drag cycles the carousel
+  if (!selectedCard) {
+    const dy = e.clientY - pointerDownPos.y;
+    const travelled = dy - carouselDragAccum;
+    if (Math.abs(travelled) >= DRAG_CYCLE_THRESHOLD) {
+      const steps = Math.trunc(travelled / DRAG_CYCLE_THRESHOLD);
+      // Drag down = positive dy = scroll toward next card (like scroll-down)
+      centerIndex = (centerIndex + steps + cards.length) % cards.length;
+      carouselDragAccum += steps * DRAG_CYCLE_THRESHOLD;
+      animateToPositions();
     }
   }
 });
@@ -220,7 +247,12 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointerup', (e) => {
   canvas.releasePointerCapture(e.pointerId);
   cancelHold();
-  stopDrag();
+  stopRotateDrag();
+
+  const wasDown = pointerIsDown;
+  pointerIsDown = false;
+
+  if (!wasDown) return;
 
   // Ignore if pointer moved (was a drag, not a click)
   const dx = e.clientX - pointerDownPos.x;
@@ -231,7 +263,6 @@ canvas.addEventListener('pointerup', (e) => {
   const hit = raycast(e.clientX, e.clientY);
 
   if (selectedCard) {
-    // Clicked outside the selected card → deselect
     if (hit !== selectedCard) {
       deselectCard();
     }
@@ -244,30 +275,21 @@ canvas.addEventListener('pointerup', (e) => {
   }
 });
 
-// ─── Input: Drag Selected Card (X-axis rotation) ──────────────────────────
+// ─── Input: Drag Selected Card (Y-axis rotation) ──────────────────────────
 
-let isDragging = false;
-let dragStartX = 0;
+let isRotateDragging = false;
+let rotateDragStartX = 0;
 let cardStartRotY = 0;
 
-function startDrag(e) {
-  isDragging = true;
-  dragStartX = e.clientX;
+function startRotateDrag(e) {
+  isRotateDragging = true;
+  rotateDragStartX = e.clientX;
   cardStartRotY = selectedCard.rotation.y;
 }
 
-function stopDrag() {
-  isDragging = false;
+function stopRotateDrag() {
+  isRotateDragging = false;
 }
-
-canvas.addEventListener('pointermove', (e) => {
-  if (!isDragging || !selectedCard) return;
-  const dx = e.clientX - dragStartX;
-  selectedCard.rotation.y = cardStartRotY + dx * 0.008;
-
-  // Cancel hold if moved enough
-  if (Math.abs(dx) > 3) cancelHold();
-});
 
 // ─── Input: Touch drag to Cycle ───────────────────────────────────────────
 
