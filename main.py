@@ -14,10 +14,13 @@ from enrollment import process_paid_enrollment, finalize_pending_enrollment
 from payments.stripe_pay import handle_webhook, retrieve_checkout_session
 from auth_dialog import open_auth_dialog
 from launch import generate_launch_credentials
+from stellar_ops import get_xlm_balance, send_xlm
 import ipfs_client
-from qr_gen import regenerate_qr, generate_link_qr, regenerate_all_link_qrs
+from qr_gen import (
+    regenerate_qr, generate_link_qr, regenerate_all_link_qrs, generate_user_qr,
+)
 from wallet_ops import create_denom_wallet_for_user, build_pay_uri
-from config import DENOM_PRESETS
+from config import DENOM_PRESETS, BANKER_25519, GUARDIAN_25519, BANKER_KP
 from linktree_renderer import render_linktree
 from theme import apply_theme, load_and_apply_theme, resolve_active_palette
 import json
@@ -833,118 +836,293 @@ async def settings():
         ).classes('self-start ml-4 opacity-70')
         with ui.column().classes('w-[75vw] gap-6'):
             ui.label('SETTINGS').classes('text-3xl font-bold')
-            ui.label('Customize your profile theme.').classes('text-sm opacity-70')
+            # ── THEME expansion ──
+            with ui.expansion('THEME', icon='palette').classes('w-full'):
 
-            # ── Live preview (above palettes) ──
-            ui.label('PREVIEW').classes('text-lg font-bold mt-2')
-            preview = ui.card().classes('w-full p-6 rounded-lg gap-3 preview-card')
-            with preview:
-                preview_moniker = ui.label(moniker.upper()).classes('text-2xl font-bold')
-                with ui.element('div').classes('px-3 py-1 rounded-lg').style(
-                    'display: inline-block; width: fit-content;'
-                ) as preview_badge:
-                    preview_badge_label = ui.label(
-                        'COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER'
-                    ).classes('text-xs font-bold')
-                preview_link1 = ui.label('example-link.com').classes('font-semibold')
-                preview_link2 = ui.label('another-link.com').classes('font-semibold')
+                # ── Live preview (above palettes) ──
+                ui.label('PREVIEW').classes('text-lg font-bold mt-2')
+                preview = ui.card().classes('w-full p-6 rounded-lg gap-3 preview-card')
+                with preview:
+                    preview_moniker = ui.label(moniker.upper()).classes('text-2xl font-bold')
+                    with ui.element('div').classes('px-3 py-1 rounded-lg').style(
+                        'display: inline-block; width: fit-content;'
+                    ) as preview_badge:
+                        preview_badge_label = ui.label(
+                            'COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER'
+                        ).classes('text-xs font-bold')
+                    preview_link1 = ui.label('example-link.com').classes('font-semibold')
+                    preview_link2 = ui.label('another-link.com').classes('font-semibold')
 
-            # ── Helper: build a palette column with 6 swatches ──
-            def build_palette(label, prefix, container):
-                """Build 6 color swatch buttons inside container.
-                prefix='' for light, prefix='dark_' for dark."""
-                with container:
-                    ui.label(label).classes('text-md font-medium opacity-70')
-                    with ui.row().classes('flex-wrap gap-3'):
-                        for swatch_label, base_key in _SWATCH_DEFS:
-                            key = f'{prefix}{base_key}' if prefix else base_key
-                            color_val = state.get(key, '#888888')
-                            with ui.column().classes('items-center gap-1'):
-                                btn = ui.button().props('flat unelevated').classes(
-                                    'w-10 h-10 min-w-0 p-0 rounded-lg'
-                                ).style(
-                                    f'background-color: {color_val} !important;'
-                                    'border: 1px solid rgba(128,128,128,0.3);'
+                # ── Helper: build a palette column with 6 swatches ──
+                def build_palette(label, prefix, container):
+                    """Build 6 color swatch buttons inside container.
+                    prefix='' for light, prefix='dark_' for dark."""
+                    with container:
+                        ui.label(label).classes('text-md font-medium opacity-70')
+                        with ui.row().classes('flex-wrap gap-3'):
+                            for swatch_label, base_key in _SWATCH_DEFS:
+                                key = f'{prefix}{base_key}' if prefix else base_key
+                                color_val = state.get(key, '#888888')
+                                with ui.column().classes('items-center gap-1'):
+                                    btn = ui.button().props('flat unelevated').classes(
+                                        'w-10 h-10 min-w-0 p-0 rounded-lg'
+                                    ).style(
+                                        f'background-color: {color_val} !important;'
+                                        'border: 1px solid rgba(128,128,128,0.3);'
+                                    )
+
+                                    def make_handler(k, b):
+                                        def on_pick(e):
+                                            b.style(
+                                                f'background-color: {e.color} !important;'
+                                                'border: 1px solid rgba(128,128,128,0.3);'
+                                            )
+                                            state[k] = e.color
+                                            apply_live_theme()
+                                        return on_pick
+
+                                    with btn:
+                                        ui.color_picker(
+                                            on_pick=make_handler(key, btn)
+                                        ).props('no-header no-footer')
+
+                                    ui.label(swatch_label).classes(
+                                        'text-[10px] opacity-50'
+                                    )
+
+                # ── Toggle + both palettes in one row ──
+                with ui.row().classes('w-full items-start gap-4'):
+                    with ui.column().classes('items-center gap-1 pt-4'):
+                        ui.label('LIGHT').classes('text-xs font-bold opacity-70')
+                        mode_toggle = ui.switch('', value=state['dark_mode']).props('dense')
+                        ui.label('DARK').classes('text-xs font-bold opacity-70')
+                    light_col = ui.column().classes('flex-1 gap-2 preview-card p-3 rounded-lg')
+                    dark_col = ui.column().classes('flex-1 gap-2 preview-card p-3 rounded-lg')
+
+                build_palette('light', '', light_col)
+                build_palette('dark', 'dark_', dark_col)
+
+                def apply_live_theme():
+                    """Update preview card + entire app UI."""
+                    p = 'dark_' if mode_toggle.value else ''
+                    bg = state.get(f'{p}bg_color', '#ffffff')
+                    txt = state.get(f'{p}text_color', '#000000')
+                    acc = state.get(f'{p}accent_color', '#8c52ff')
+                    lnk = state.get(f'{p}link_color', '#f2d894')
+                    card_c = state.get(f'{p}card_color', '#f5f5f5')
+                    border_c = state.get(f'{p}border_color', '#e0e0e0')
+                    # Update preview card
+                    preview.style(f'background-color: {bg};')
+                    preview_moniker.style(f'color: {txt};')
+                    preview_badge.style(
+                        f'background-color: {acc}40; display: inline-block; width: fit-content;'
+                    )
+                    preview_badge_label.style(f'color: {txt};')
+                    preview_link1.style(f'color: {lnk};')
+                    preview_link2.style(f'color: {lnk};')
+                    # Update entire app UI
+                    apply_theme(
+                        primary=acc, secondary=lnk, text=txt,
+                        bg=bg, card=card_c, border=border_c,
+                    )
+
+                apply_live_theme()
+                mode_toggle.on_value_change(lambda: apply_live_theme())
+
+                # ── Save ──
+                save_label = ui.label('').classes('text-sm')
+                save_label.set_visibility(False)
+
+                async def save_settings():
+                    color_kwargs = {k: state[k] for k in db._COLOR_COLS}
+                    await db.upsert_profile_colors(user_id, **color_kwargs)
+                    await db.upsert_profile_settings(
+                        user_id,
+                        linktree_override=psettings['linktree_override'],
+                        linktree_url=psettings['linktree_url'],
+                        dark_mode=int(mode_toggle.value),
+                    )
+                    await regenerate_qr(user_id)
+                    await regenerate_all_link_qrs(user_id)
+                    ipfs_client.schedule_republish(user_id)
+                    save_label.text = 'Settings saved!'
+                    save_label.set_visibility(True)
+
+                ui.button('SAVE', on_click=save_settings).classes(
+                    'mt-4 px-8 py-3 text-lg'
+                )
+
+            # ── WALLET expansion (coop only) ──
+            if member_type == 'coop':
+                with ui.expansion('WALLET', icon='account_balance_wallet').classes(
+                    'w-full'
+                ):
+                    stellar_addr = user['stellar_address'] if user else ''
+
+                    # ── Balance display ──
+                    bal_raw = get_xlm_balance(stellar_addr)
+                    bal_text = f'{float(bal_raw):.2f} XLM' if bal_raw else 'Not funded'
+                    balance_label = ui.label(bal_text).classes(
+                        'text-2xl font-bold'
+                    )
+
+                    # Truncated address + copy
+                    with ui.row().classes('items-center gap-2'):
+                        addr_short = (
+                            f'{stellar_addr[:6]}...{stellar_addr[-6:]}'
+                            if len(stellar_addr) > 12 else stellar_addr
+                        )
+                        ui.label(addr_short).classes('text-sm opacity-60 font-mono')
+                        ui.button(
+                            icon='content_copy',
+                            on_click=lambda: ui.run_javascript(
+                                f'navigator.clipboard.writeText("{stellar_addr}")'
+                            ),
+                        ).props('flat dense size=sm')
+
+                    def refresh_balance():
+                        b = get_xlm_balance(stellar_addr)
+                        balance_label.text = (
+                            f'{float(b):.2f} XLM' if b else 'Not funded'
+                        )
+
+                    with ui.row().classes('gap-3 mt-2'):
+                        ui.button('REFRESH', icon='refresh',
+                                  on_click=refresh_balance).props('flat dense')
+
+                        # ── Receive dialog ──
+                        def open_receive():
+                            import base64
+                            pay_uri = (
+                                f'web+stellar:pay?destination={stellar_addr}'
+                            )
+                            png_bytes = generate_user_qr(
+                                pay_uri,
+                                os.path.join(static_files_dir, 'stellar_logo.png'),
+                                colors.get('accent_color', '#8c52ff'),
+                                colors.get('bg_color', '#ffffff'),
+                            )
+                            b64 = base64.b64encode(png_bytes).decode()
+                            data_uri = f'data:image/png;base64,{b64}'
+                            with ui.dialog() as dlg, ui.card().classes(
+                                'items-center gap-3 p-6'
+                            ):
+                                ui.label('RECEIVE XLM').classes(
+                                    'text-lg font-bold'
                                 )
+                                ui.image(data_uri).classes('w-64 h-64')
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.label(stellar_addr).classes(
+                                        'text-xs font-mono break-all'
+                                    )
+                                    ui.button(
+                                        icon='content_copy',
+                                        on_click=lambda: ui.run_javascript(
+                                            f'navigator.clipboard.writeText("{stellar_addr}")'
+                                        ),
+                                    ).props('flat dense size=sm')
+                                ui.button('CLOSE', on_click=dlg.close).props(
+                                    'flat'
+                                )
+                            dlg.open()
 
-                                def make_handler(k, b):
-                                    def on_pick(e):
-                                        b.style(
-                                            f'background-color: {e.color} !important;'
-                                            'border: 1px solid rgba(128,128,128,0.3);'
+                        ui.button('RECEIVE', icon='qr_code',
+                                  on_click=open_receive).props('flat dense')
+
+                        # ── Send dialog ──
+                        def open_send():
+                            with ui.dialog() as dlg, ui.card().classes(
+                                'gap-4 p-6 min-w-[320px]'
+                            ):
+                                ui.label('SEND XLM').classes(
+                                    'text-lg font-bold'
+                                )
+                                dest_input = ui.input(
+                                    'Destination address',
+                                    validation={
+                                        'Must start with G':
+                                            lambda v: v.startswith('G'),
+                                        'Must be 56 characters':
+                                            lambda v: len(v) == 56,
+                                    },
+                                ).classes('w-full')
+                                amt_input = ui.number(
+                                    'Amount (XLM)', min=0.0000001,
+                                    format='%.7f',
+                                ).classes('w-full')
+                                memo_input = ui.input(
+                                    'Memo (optional)',
+                                    validation={
+                                        'Max 28 characters':
+                                            lambda v: len(v) <= 28,
+                                    },
+                                ).classes('w-full')
+                                send_error = ui.label('').classes(
+                                    'text-sm text-red-500'
+                                )
+                                send_error.set_visibility(False)
+
+                                async def do_send():
+                                    d = dest_input.value or ''
+                                    a = amt_input.value
+                                    m = memo_input.value or ''
+                                    # Validate
+                                    if not d.startswith('G') or len(d) != 56:
+                                        send_error.text = 'Invalid destination address.'
+                                        send_error.set_visibility(True)
+                                        return
+                                    if not a or float(a) <= 0:
+                                        send_error.text = 'Amount must be greater than 0.'
+                                        send_error.set_visibility(True)
+                                        return
+                                    cur_bal = get_xlm_balance(stellar_addr)
+                                    if cur_bal and float(a) > float(cur_bal):
+                                        send_error.text = 'Amount exceeds balance.'
+                                        send_error.set_visibility(True)
+                                        return
+                                    try:
+                                        from hvym_stellar import StellarSharedDecryption
+                                        from stellar_sdk import Keypair
+                                        decryptor = StellarSharedDecryption(
+                                            GUARDIAN_25519,
+                                            BANKER_25519.public_key(),
                                         )
-                                        state[k] = e.color
-                                        apply_live_theme()
-                                    return on_pick
+                                        enc = user['encrypted_token']
+                                        if isinstance(enc, str):
+                                            enc = enc.encode()
+                                        secret = decryptor.decrypt(
+                                            enc,
+                                            from_address=BANKER_KP.public_key,
+                                        )
+                                        if isinstance(secret, bytes):
+                                            secret = secret.decode()
+                                        user_kp = Keypair.from_secret(secret)
+                                        resp = send_xlm(
+                                            user_kp, d, str(a),
+                                            memo=m if m else None,
+                                        )
+                                        tx_hash = resp.get('hash', 'unknown')
+                                        dlg.close()
+                                        ui.notify(
+                                            f'Sent! TX: {tx_hash[:12]}...',
+                                            type='positive',
+                                        )
+                                        refresh_balance()
+                                    except Exception as exc:
+                                        send_error.text = f'Error: {exc}'
+                                        send_error.set_visibility(True)
 
-                                with btn:
-                                    ui.color_picker(
-                                        on_pick=make_handler(key, btn)
-                                    ).props('no-header no-footer')
+                                with ui.row().classes('gap-3 mt-2'):
+                                    ui.button('SEND', on_click=do_send).props(
+                                        'color=primary'
+                                    )
+                                    ui.button(
+                                        'CANCEL', on_click=dlg.close
+                                    ).props('flat')
+                            dlg.open()
 
-                                ui.label(swatch_label).classes(
-                                    'text-[10px] opacity-50'
-                                )
-
-            # ── Toggle + both palettes in one row ──
-            with ui.row().classes('w-full items-start gap-4'):
-                with ui.column().classes('items-center gap-1 pt-4'):
-                    ui.label('LIGHT').classes('text-xs font-bold opacity-70')
-                    mode_toggle = ui.switch('', value=state['dark_mode']).props('dense')
-                    ui.label('DARK').classes('text-xs font-bold opacity-70')
-                light_col = ui.column().classes('flex-1 gap-2 preview-card p-3 rounded-lg')
-                dark_col = ui.column().classes('flex-1 gap-2 preview-card p-3 rounded-lg')
-
-            build_palette('light', '', light_col)
-            build_palette('dark', 'dark_', dark_col)
-
-            def apply_live_theme():
-                """Update preview card + entire app UI."""
-                p = 'dark_' if mode_toggle.value else ''
-                bg = state.get(f'{p}bg_color', '#ffffff')
-                txt = state.get(f'{p}text_color', '#000000')
-                acc = state.get(f'{p}accent_color', '#8c52ff')
-                lnk = state.get(f'{p}link_color', '#f2d894')
-                card_c = state.get(f'{p}card_color', '#f5f5f5')
-                border_c = state.get(f'{p}border_color', '#e0e0e0')
-                # Update preview card
-                preview.style(f'background-color: {bg};')
-                preview_moniker.style(f'color: {txt};')
-                preview_badge.style(
-                    f'background-color: {acc}40; display: inline-block; width: fit-content;'
-                )
-                preview_badge_label.style(f'color: {txt};')
-                preview_link1.style(f'color: {lnk};')
-                preview_link2.style(f'color: {lnk};')
-                # Update entire app UI
-                apply_theme(
-                    primary=acc, secondary=lnk, text=txt,
-                    bg=bg, card=card_c, border=border_c,
-                )
-
-            apply_live_theme()
-            mode_toggle.on_value_change(lambda: apply_live_theme())
-
-            # ── Save ──
-            save_label = ui.label('').classes('text-sm')
-            save_label.set_visibility(False)
-
-            async def save_settings():
-                color_kwargs = {k: state[k] for k in db._COLOR_COLS}
-                await db.upsert_profile_colors(user_id, **color_kwargs)
-                await db.upsert_profile_settings(
-                    user_id,
-                    linktree_override=psettings['linktree_override'],
-                    linktree_url=psettings['linktree_url'],
-                    dark_mode=int(mode_toggle.value),
-                )
-                await regenerate_qr(user_id)
-                await regenerate_all_link_qrs(user_id)
-                ipfs_client.schedule_republish(user_id)
-                save_label.text = 'Settings saved!'
-                save_label.set_visibility(True)
-
-            ui.button('SAVE', on_click=save_settings).classes('mt-4 px-8 py-3 text-lg')
+                        ui.button('SEND', icon='send',
+                                  on_click=open_send).props('flat dense')
 
     dashboard_nav()
 
