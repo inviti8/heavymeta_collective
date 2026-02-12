@@ -17,6 +17,7 @@ from launch import generate_launch_credentials
 import ipfs_client
 from linktree_renderer import render_linktree
 from theme import apply_theme, load_and_apply_theme, resolve_active_palette
+import json
 import time as _time
 
 static_files_dir = os.path.join(os.path.dirname(__file__), 'static')
@@ -464,7 +465,7 @@ async def card_editor():
     dashboard_nav(active='card_editor')
 
 
-# ─── Card Case (shell) ──────────────────────────────────────────────────────
+# ─── Card Wallet (3D) ────────────────────────────────────────────────────────
 
 @ui.page('/card/case')
 async def card_case():
@@ -477,34 +478,52 @@ async def card_case():
     member_type = app.storage.user.get('member_type', 'free')
     psettings = await db.get_profile_settings(user_id)
 
+    # Load peer cards from DB
+    peers = await db.get_peer_cards(user_id)
+    peer_data = []
+    for p in peers:
+        pd = dict(p)
+        moniker_slug = pd['moniker'].lower().replace(' ', '-')
+        peer_data.append({
+            'moniker': pd['moniker'],
+            'front_url': (f'{config.KUBO_GATEWAY}/ipfs/{pd["nfc_image_cid"]}'
+                          if pd.get('nfc_image_cid') else ''),
+            'back_url': (f'{config.KUBO_GATEWAY}/ipfs/{pd["nfc_back_image_cid"]}'
+                         if pd.get('nfc_back_image_cid') else ''),
+            'linktree_url': f'/profile/{moniker_slug}',
+        })
+
     header = dashboard_header(moniker, member_type, user_id=user_id,
                               override_enabled=bool(psettings['linktree_override']),
                               override_url=psettings['linktree_url'],
                               ipns_name=user['ipns_name'])
     hide_dashboard_chrome(header)
 
-    with ui.column().classes('w-full items-center gap-4 pb-24'):
-        with ui.column().classes('w-[75vw] gap-4'):
-            ui.label('CARD CASE').classes('text-3xl font-bold')
-            ui.label('Collect virtual cards from other Heavymeta members.').classes('text-sm opacity-70')
+    # Three.js import map + full-viewport CSS (same as card editor)
+    ui.add_head_html('''
+    <script type="importmap">
+    { "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }}
+    </script>
+    <style>
+      .q-page-container { padding-top: 0 !important; }
+      .q-page, body { background-color: transparent !important; }
+      .q-layout { pointer-events: none; }
+      .q-footer { pointer-events: auto; }
+      #card-scene { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 500; }
+    </style>
+    ''')
 
-            # Placeholder cards (Apple Wallet style stack)
-            for i in range(3):
-                with ui.card().classes(
-                    'w-full rounded-2xl overflow-hidden shadow-lg'
-                ).style('margin-top: -2rem;' if i > 0 else ''):
-                    with ui.row().classes('bg-gradient-to-r from-[#f2d894] to-[#d6a5e2] p-4 items-center gap-4'):
-                        ui.image('/static/placeholder.png').classes('w-12 h-12 rounded-full')
-                        with ui.column().classes('gap-0'):
-                            ui.label(f'Member {i + 1}').classes('text-lg font-bold text-black')
-                            ui.label('heavymeta.art').classes('text-xs opacity-50 text-black')
-                    with ui.row().classes('p-3 gap-2'):
-                        ui.icon('link').classes('text-sm opacity-50')
-                        ui.label('3 links').classes('text-xs opacity-50')
-
-            if True:  # empty state hint
-                ui.separator().classes('my-4')
-                ui.label('Tap a member\'s NFC card to add it here.').classes('text-sm opacity-50 text-center w-full')
+    # Pass peer data as JSON + load wallet scene
+    _cache_v = int(_time.time())
+    peers_json = json.dumps(peer_data)
+    ui.add_body_html(f'''
+    <div id="card-scene"></div>
+    <script id="peer-data" type="application/json">{peers_json}</script>
+    <script type="module" src="/static/js/card_wallet.js?v={_cache_v}"></script>
+    ''')
 
     dashboard_nav(active='card_case')
 

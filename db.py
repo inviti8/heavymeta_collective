@@ -50,6 +50,14 @@ CREATE TABLE IF NOT EXISTS profile_settings (
     dark_mode         INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS peer_cards (
+    id           TEXT PRIMARY KEY,
+    owner_id     TEXT REFERENCES users(id),
+    peer_id      TEXT REFERENCES users(id),
+    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(owner_id, peer_id)
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id              TEXT PRIMARY KEY,
     user_id         TEXT REFERENCES users(id),
@@ -320,3 +328,41 @@ async def upsert_profile_settings(user_id, linktree_override, linktree_url,
              int(dark_mode) if dark_mode is not None else 0),
         )
         await conn.commit()
+
+
+# --- Peer Cards ---
+
+async def add_peer_card(owner_id, peer_id):
+    pid = str(uuid.uuid4())
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            """INSERT OR IGNORE INTO peer_cards (id, owner_id, peer_id)
+               VALUES (?, ?, ?)""",
+            (pid, owner_id, peer_id),
+        )
+        await conn.commit()
+    return pid
+
+
+async def remove_peer_card(owner_id, peer_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            "DELETE FROM peer_cards WHERE owner_id = ? AND peer_id = ?",
+            (owner_id, peer_id),
+        )
+        await conn.commit()
+
+
+async def get_peer_cards(owner_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            """SELECT u.moniker, u.nfc_image_cid, u.nfc_back_image_cid,
+                      u.ipns_name, u.member_type, u.id as peer_id
+               FROM peer_cards pc
+               JOIN users u ON u.id = pc.peer_id
+               WHERE pc.owner_id = ?
+               ORDER BY pc.collected_at""",
+            (owner_id,),
+        )
+        return await cursor.fetchall()
