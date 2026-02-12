@@ -529,22 +529,32 @@ WHERE LOWER(REPLACE(moniker, ' ', '-')) = ?
 
 ### Client-Side: QR Scanner
 
-**Library:** Use `html5-qrcode` (lightweight, no dependencies, works on
-mobile and desktop). Load from CDN:
+**Library:** `nimiq/qr-scanner` (self-hosted, WebWorker-based, MIT license).
+Files in `static/js/`:
+- `qr-scanner.umd.min.js` (~16KB)
+- `qr-scanner-worker.min.js` (~44KB)
 
-```html
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-```
+Previously tried `html5-qrcode` but it is abandoned (364+ open issues, no
+maintenance) and failed to detect QR codes on desktop webcams. `nimiq/qr-scanner`
+has 2-3x better detection rates and runs decoding in a WebWorker.
+
+**Desktop webcam limitation:** Styled QR codes (rounded modules + custom colors
++ embedded avatar) are difficult for most open-source decoders to read via
+fixed-focus laptop webcams. Phone cameras handle them fine due to autofocus.
+Only commercial SDKs (Scanbot, ~$2k+/yr) reliably detect styled QR on desktop
+webcams. For now the scanner targets phone-to-phone use (the primary in-person
+peer scanning scenario). A file upload fallback could be added for desktop users
+in the future.
 
 **Scanner flow in `qr_view.js`:**
 
-1. Scan button creates a `<div id="qr-reader">` overlay on top of the 3D scene
-2. Initialize `Html5Qrcode` with the reader div
-3. Start camera with `html5Qrcode.start()`
+1. Scan button opens fullscreen overlay with `<video>` element
+2. Load `qr-scanner.umd.min.js` on demand, create `QrScanner` instance
+3. Start camera with `qrScanner.start()`
 4. On successful decode:
-   - Stop scanner
+   - Stop + destroy scanner
    - Parse the URL to extract moniker slug
-   - POST to `/api/peer/add` with the slug
+   - Trigger NiceGUI bridge (hidden button click)
 5. Show result overlay (success or error)
 6. Close button returns to the 3D QR view
 
@@ -661,16 +671,17 @@ consistent with existing patterns.
 
 | File | Action | Description |
 |------|--------|-------------|
-| `static/js/qr_view.js` | **MODIFY** | Add scan button, html5-qrcode scanner overlay, URL parsing, trigger hidden button |
+| `static/js/qr_view.js` | **MODIFY** | Add scan button, nimiq/qr-scanner overlay, URL parsing, trigger hidden button |
+| `static/js/qr-scanner.umd.min.js` | **NEW** | Self-hosted nimiq/qr-scanner library (~16KB) |
+| `static/js/qr-scanner-worker.min.js` | **NEW** | Self-hosted QR scanner WebWorker (~44KB) |
 | `main.py` | **MODIFY** | Add hidden peer-scan-trigger button + handler on `/qr` route |
 | `db.py` | **MODIFY** | Add `get_user_by_moniker_slug()` query |
-| `/qr` page | **MODIFY** | Load `html5-qrcode` CDN script via `ui.add_head_html()` |
 
 ### Implementation Sequence
 
 1. **`db.py`** — Add `get_user_by_moniker_slug()`
-2. **`main.py`** — Add `html5-qrcode` CDN script + hidden trigger button + handler on `/qr`
-3. **`static/js/qr_view.js`** — Add scan button UI, scanner overlay, decode handler, trigger bridge
+2. **`main.py`** — Add hidden trigger button + handler on `/qr`
+3. **`static/js/qr_view.js`** — Add scan button UI, nimiq/qr-scanner overlay, decode handler, trigger bridge
 4. **Test** — Scan QR from another device, verify peer appears in `/card/case`
 
 ### Edge Cases
@@ -681,5 +692,5 @@ consistent with existing patterns.
 | Already a peer | `INSERT OR IGNORE` — no error, show "Already in your wallet" |
 | Invalid QR (not a profile URL) | Show "Not a valid member QR code" warning |
 | Camera permission denied | Show error message, scanner stays closed |
-| No camera available (desktop) | Button still works — `html5-qrcode` shows file upload fallback |
+| No camera available (desktop) | Show "Camera not available" error message |
 | Member not found in DB | Show "Member not found" warning |

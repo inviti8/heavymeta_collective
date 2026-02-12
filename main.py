@@ -592,9 +592,8 @@ async def qr_view():
 
     qr_url = f'{config.KUBO_GATEWAY}/ipfs/{qr_cid}' if qr_cid else ''
 
-    # Full-viewport CSS + html5-qrcode library
+    # Full-viewport CSS + qr-scanner library (nimiq/qr-scanner)
     ui.add_head_html('''
-    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <style>
       .q-page, body { background-color: transparent !important; }
       .q-layout { pointer-events: none; }

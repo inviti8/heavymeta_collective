@@ -179,9 +179,9 @@ function init(container) {
     cancelHold();
   });
 
-  // ─── QR Scanner ────────────────────────────────────────────────────
+  // ─── QR Scanner (nimiq/qr-scanner — WebWorker-based) ───────────────
 
-  let html5QrCode = null;
+  let qrScanner = null;
 
   function extractMonikerSlug(text) {
     const match = text.match(/\/profile\/([a-z0-9-]+)/i);
@@ -200,6 +200,14 @@ function init(container) {
   `;
   document.body.appendChild(scanBtn);
 
+  // Video element for nimiq/qr-scanner
+  let scanVideo = document.createElement('video');
+  scanVideo.id = 'qr-video';
+  scanVideo.style.cssText = `
+    width: min(80vw, 400px); border-radius: 12px;
+    object-fit: cover;
+  `;
+
   // Scanner overlay
   const overlay = document.createElement('div');
   overlay.style.cssText = `
@@ -217,7 +225,7 @@ function init(container) {
     <p style="color: white; margin-bottom: 16px; font-size: 14px; opacity: 0.7;">
       Point camera at a member's QR code
     </p>
-    <div id="qr-reader" style="width: min(80vw, 400px);"></div>
+    <div id="qr-reader" style="width: min(80vw, 400px); display: flex; justify-content: center;"></div>
     <div id="qr-scan-result" style="
       display: none; color: white; margin-top: 24px; text-align: center;
       padding: 16px; background: rgba(255,255,255,0.1); border-radius: 12px;
@@ -226,39 +234,72 @@ function init(container) {
   `;
   document.body.appendChild(overlay);
 
-  function openScanner() {
+  // Insert video into reader container
+  document.getElementById('qr-reader').appendChild(scanVideo);
+
+  // Load nimiq/qr-scanner (UMD build, sets window.QrScanner)
+  async function loadQrScannerLib() {
+    if (window.QrScanner) return;
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/static/js/qr-scanner.umd.min.js';
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  async function openScanner() {
     overlay.style.display = 'flex';
     const resultDiv = document.getElementById('qr-scan-result');
     resultDiv.style.display = 'none';
 
-    html5QrCode = new Html5Qrcode('qr-reader');
-    html5QrCode.start(
-      { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 250, height: 250 } },
-      onScanSuccess,
-    ).catch(() => {
-      // Camera failed — try file-based fallback
-      resultDiv.innerHTML = '<p>Camera not available. Try uploading a QR image instead.</p>';
+    try {
+      await loadQrScannerLib();
+
+      // Point worker path to self-hosted file
+      QrScanner.WORKER_PATH = '/static/js/qr-scanner-worker.min.js';
+
+      qrScanner = new QrScanner(
+        scanVideo,
+        (result) => onScanSuccess(result.data),
+        {
+          preferredCamera: 'environment',
+          maxScansPerSecond: 15,
+          highlightScanRegion: true,
+          highlightCodeOutline: true,
+          returnDetailedScanResult: true,
+          calculateScanRegion: (video) => {
+            const size = Math.min(video.videoWidth, video.videoHeight) * 0.67;
+            const x = (video.videoWidth - size) / 2;
+            const y = (video.videoHeight - size) / 2;
+            return { x, y, width: size, height: size,
+                     downScaledWidth: 400, downScaledHeight: 400 };
+          },
+        }
+      );
+      await qrScanner.start();
+    } catch (e) {
+      resultDiv.innerHTML = '<p>Camera not available. Check permissions and try again.</p>';
       resultDiv.style.display = 'block';
-    });
+    }
+  }
+
+  function stopScanner() {
+    if (qrScanner) {
+      qrScanner.stop();
+      qrScanner.destroy();
+      qrScanner = null;
+    }
   }
 
   function closeScanner() {
-    if (html5QrCode) {
-      html5QrCode.stop().catch(() => {});
-      html5QrCode.clear();
-      html5QrCode = null;
-    }
+    stopScanner();
     overlay.style.display = 'none';
   }
 
-  async function onScanSuccess(decodedText) {
-    // Stop scanning immediately
-    if (html5QrCode) {
-      await html5QrCode.stop().catch(() => {});
-      html5QrCode.clear();
-      html5QrCode = null;
-    }
+  function onScanSuccess(decodedText) {
+    stopScanner();
 
     const slug = extractMonikerSlug(decodedText);
     const resultDiv = document.getElementById('qr-scan-result');
@@ -343,6 +384,18 @@ function init(container) {
   retryBtn.addEventListener('click', () => {
     const resultDiv = document.getElementById('qr-scan-result');
     resultDiv.style.display = 'none';
+    // Re-insert video element (destroyed by previous scanner)
+    const readerEl = document.getElementById('qr-reader');
+    if (!readerEl.querySelector('video')) {
+      const newVideo = document.createElement('video');
+      newVideo.id = 'qr-video';
+      newVideo.style.cssText = `
+        width: min(80vw, 400px); border-radius: 12px;
+        object-fit: cover;
+      `;
+      readerEl.appendChild(newVideo);
+      scanVideo = newVideo;
+    }
     openScanner();
   });
   document.body.appendChild(retryBtn);
