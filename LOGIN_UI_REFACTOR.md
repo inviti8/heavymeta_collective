@@ -772,3 +772,128 @@ On `/join/success`, after detecting the user is now 'coop', call
 5. `/join/success` polls with a session-stored identifier (email or
    a pending-signup token) instead of user_id.
 6. On successful poll, `set_session()` and redirect to dashboard.
+
+---
+
+## 14. Branded QR Code — Stellar Logo Embed
+
+### Problem
+
+The current `generate_stellar_qr()` in `payments/stellar_pay.py` generates a
+plain black-and-white QR code with no branding. We want to embed the Stellar
+logo in the center of the QR code, matching the style used in the adjacent
+`../pintheon` repo.
+
+### Reference Implementation — `pintheon`
+
+`pintheonMachine/__init__.py` uses the `qrcode` library's styled image support:
+
+```python
+from qrcode.image.styledpil import StyledPilImage
+from qrcode.image.styles.moduledrawers.pil import RoundedModuleDrawer
+from qrcode.image.styles.colormasks import SolidFillColorMask
+from PIL import Image, ImageDraw
+
+STELLAR_BG_RGB = (255, 255, 255)
+STELLAR_FG_RGB = (0, 0, 0)
+
+def _custom_qr_code(self, data, cntrImg, out_url, back_color, front_color):
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,  # ← HIGH correction for logo overlay
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(
+        image_factory=StyledPilImage,
+        module_drawer=RoundedModuleDrawer(),
+        color_mask=SolidFillColorMask(back_color=back_color, front_color=front_color),
+        embeded_image_path=cntrImg,  # ← logo image centered in QR
+    )
+    img.save(out_url, format='PNG')
+```
+
+Key points:
+- `ERROR_CORRECT_H` — highest error correction level, required so the QR
+  remains scannable with a logo covering the center (~30% data redundancy)
+- `StyledPilImage` — PIL-based image factory that supports styled modules
+- `RoundedModuleDrawer()` — rounded QR dots instead of sharp squares
+- `SolidFillColorMask` — custom foreground/background colors
+- `embeded_image_path` — path to the logo image, automatically centered and sized
+
+### Available Assets
+
+```
+static/stellar_logo.png        — standard Stellar logo
+static/stellar_logo_light.png  — light variant
+static/stellar_logo_dark.png   — dark variant
+```
+
+### Changes Required
+
+**File: `payments/stellar_pay.py`**
+
+Replace the current `generate_stellar_qr()`:
+
+```python
+# Current — plain QR
+def generate_stellar_qr(uri):
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(uri)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    return f"data:image/png;base64,{b64}"
+```
+
+With branded version:
+
+```python
+import os
+from qrcode.image.styledpil import StyledPilImage
+from qrcode.image.styles.moduledrawers.pil import RoundedModuleDrawer
+from qrcode.image.styles.colormasks import SolidFillColorMask
+
+STELLAR_LOGO = os.path.join(os.path.dirname(__file__), '..', 'static', 'stellar_logo.png')
+
+def generate_stellar_qr(uri):
+    """Generate a branded QR code with the Stellar logo embedded in the center."""
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(uri)
+    qr.make(fit=True)
+    img = qr.make_image(
+        image_factory=StyledPilImage,
+        module_drawer=RoundedModuleDrawer(),
+        color_mask=SolidFillColorMask(
+            back_color=(255, 255, 255),
+            front_color=(0, 0, 0),
+        ),
+        embeded_image_path=STELLAR_LOGO,
+    )
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    return f"data:image/png;base64,{b64}"
+```
+
+### Dependencies
+
+Already installed: `qrcode[pil]` pulls in Pillow which provides `StyledPilImage`,
+`RoundedModuleDrawer`, and `SolidFillColorMask`. No new dependencies needed —
+verify with `uv pip list | grep qrcode`.
+
+### Implementation Sequence
+
+1. Verify `qrcode[pil]` is installed and styled image imports work
+2. Update `generate_stellar_qr()` in `payments/stellar_pay.py`
+3. Test: generate a QR code and verify the Stellar logo is visible in the center
+4. Test: scan the QR code with a Stellar wallet to confirm it's still readable

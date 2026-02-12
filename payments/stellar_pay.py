@@ -1,19 +1,39 @@
 import uuid
 import io
+import os
 import base64
 import qrcode
+from qrcode.image.styledpil import StyledPilImage
+from qrcode.image.styles.moduledrawers.pil import RoundedModuleDrawer
+from qrcode.image.styles.colormasks import SolidFillColorMask
 from stellar_sdk import Server
 from config import BANKER_PUB, HORIZON_URL
 
 XLM_COST = "333"
 server = Server(horizon_url=HORIZON_URL)
 
+STELLAR_LOGO = os.path.join(os.path.dirname(__file__), '..', 'static', 'stellar_logo.png')
+
 
 def generate_stellar_qr(uri):
-    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    """Generate a branded QR code with the Stellar logo embedded in the center."""
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=10,
+        border=4,
+    )
     qr.add_data(uri)
     qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
+    img = qr.make_image(
+        image_factory=StyledPilImage,
+        module_drawer=RoundedModuleDrawer(),
+        color_mask=SolidFillColorMask(
+            back_color=(255, 255, 255),
+            front_color=(0, 0, 0),
+        ),
+        embeded_image_path=STELLAR_LOGO,
+    )
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     b64 = base64.b64encode(buf.getvalue()).decode()
