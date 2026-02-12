@@ -24,6 +24,19 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
 
     ui.query('body').style(f'background-color: {bg};')
 
+    # 3D avatar scene CSS
+    ui.add_head_html('''
+    <style>
+      #avatar-scene {
+        position: fixed;
+        border-radius: 50%;
+        overflow: hidden;
+        z-index: 99999;
+        pointer-events: auto;
+      }
+    </style>
+    ''')
+
     if is_preview:
         ui.button(icon='chevron_left', on_click=lambda: ui.navigate.back()).props(
             'flat round'
@@ -32,7 +45,16 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
     with ui.column().classes(
         'w-full items-center py-8'
     ).style(f'background: linear-gradient(to right, {acc}, {lnk});'):
-        ui.image(avatar_url).classes('w-32 h-32 rounded-full shadow-md')
+        # Layout spacer — the 3D scene overlays this via fixed positioning
+        ui.element('div').classes('avatar-placeholder shadow-md').style(
+            'width: 8rem; height: 8rem; border-radius: 50%;'
+        )
+        import time as _time
+        _av = int(_time.time())
+        ui.add_body_html(
+            f'<div id="avatar-scene" data-avatar-url="{avatar_url}"></div>'
+            f'<script type="module" src="/static/js/avatar_view.js?v={_av}"></script>'
+        )
         ui.label(moniker).classes('text-3xl font-bold mt-4').style(f'color: {txt};')
 
         stellar_wallet = next(

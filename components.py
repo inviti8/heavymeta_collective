@@ -78,7 +78,7 @@ def dashboard_header(moniker, member_type, user_id=None,
         position: fixed;
         border-radius: 50%;
         overflow: hidden;
-        z-index: 6000;
+        z-index: 99999;
         pointer-events: auto;
       }
     </style>
