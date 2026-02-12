@@ -24,14 +24,18 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
 
     ui.query('body').style(f'background-color: {bg};')
 
-    # 3D avatar scene CSS
-    ui.add_head_html('''
+    # 3D avatar scene CSS + icon color override
+    ui.add_head_html(f'''
     <style>
-      #avatar-scene {
+      #avatar-scene {{
         position: fixed;
         z-index: 99999;
         pointer-events: auto;
-      }
+      }}
+      .q-footer .q-icon,
+      .q-btn .q-icon {{
+        color: {txt} !important;
+      }}
     </style>
     ''')
 
@@ -104,11 +108,11 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
                                 ui.run_javascript(
                                     f"navigator.clipboard.writeText('{a}')"
                                 ),
-                        ).props('flat dense size=sm')
+                        ).props('flat dense size=sm').style(f'color: {txt} !important;')
 
     with ui.footer().classes('flex justify-center items-center py-3').style(
         f'background-color: {acc};'
     ):
         ui.button(
             icon='arrow_back', on_click=lambda: ui.navigate.to('/')
-        ).props('flat round').style('color: white;')
+        ).props('flat round').style(f'color: {txt} !important;')
