@@ -98,6 +98,8 @@ async def init_db():
             "ALTER TABLE profile_settings ADD COLUMN dark_mode INTEGER DEFAULT 0",
             # Avatar
             "ALTER TABLE users ADD COLUMN avatar_cid TEXT",
+            # QR code
+            "ALTER TABLE users ADD COLUMN qr_code_cid TEXT",
         ]
         for sql in migrations:
             try:

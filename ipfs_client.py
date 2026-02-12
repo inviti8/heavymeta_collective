@@ -161,8 +161,8 @@ _DEFAULT_COLORS = {
 
 def build_linktree_json(*, moniker, member_type, stellar_address=None,
                         links=None, colors=None, avatar_cid=None,
-                        card_design_cid=None, override_url="",
-                        settings=None):
+                        card_design_cid=None, qr_code_cid=None,
+                        override_url="", settings=None):
     """Assemble schema v1 linktree JSON from current data.
 
     Args:
@@ -234,6 +234,7 @@ def build_linktree_json(*, moniker, member_type, stellar_address=None,
         "links": link_list,
         "wallets": wallets,
         "card_design_cid": card_design_cid,
+        "qr_code_cid": qr_code_cid,
         "override_url": override_url or "",
     }
 
@@ -265,6 +266,7 @@ async def build_linktree_fresh(user_id: str) -> dict:
         colors=colors,
         avatar_cid=dict(user).get('avatar_cid'),
         card_design_cid=dict(user).get('nfc_image_cid'),
+        qr_code_cid=dict(user).get('qr_code_cid'),
         settings=settings,
     )
 
@@ -293,6 +295,7 @@ async def republish_linktree(user_id: str) -> str | None:
         colors=colors,
         avatar_cid=dict(user).get('avatar_cid'),
         card_design_cid=dict(user).get('nfc_image_cid'),
+        qr_code_cid=dict(user).get('qr_code_cid'),
         settings=settings,
     )
 

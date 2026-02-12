@@ -15,6 +15,7 @@ from payments.stripe_pay import handle_webhook, retrieve_checkout_session
 from auth_dialog import open_auth_dialog
 from launch import generate_launch_credentials
 import ipfs_client
+from qr_gen import regenerate_qr
 from linktree_renderer import render_linktree
 from theme import apply_theme, load_and_apply_theme, resolve_active_palette
 import json
@@ -558,6 +559,62 @@ async def card_case():
     ''')
 
     dashboard_nav(active='card_case')
+
+
+# ─── QR Code View (3D) ──────────────────────────────────────────────────────
+
+@ui.page('/qr')
+async def qr_view():
+    if not require_auth():
+        return
+
+    user_id = app.storage.user.get('user_id')
+    user = await db.get_user_by_id(user_id)
+    moniker = user['moniker'] if user else app.storage.user.get('moniker', 'Unknown')
+    member_type = app.storage.user.get('member_type', 'free')
+    psettings = await db.get_profile_settings(user_id)
+
+    header = dashboard_header(moniker, member_type, user_id=user_id,
+                              override_enabled=bool(psettings['linktree_override']),
+                              override_url=psettings['linktree_url'],
+                              ipns_name=user['ipns_name'])
+    hide_dashboard_chrome(header)
+
+    # Get or generate QR code
+    qr_cid = dict(user).get('qr_code_cid') if user else None
+    if not qr_cid:
+        try:
+            await regenerate_qr(user_id)
+            user = await db.get_user_by_id(user_id)
+            qr_cid = dict(user).get('qr_code_cid')
+        except Exception:
+            pass
+
+    qr_url = f'{config.KUBO_GATEWAY}/ipfs/{qr_cid}' if qr_cid else ''
+
+    # Full-viewport CSS
+    ui.add_head_html('''
+    <style>
+      .q-page, body { background-color: transparent !important; }
+      .q-layout { pointer-events: none; }
+      .q-footer { pointer-events: auto; }
+      #qr-scene {
+        position: fixed;
+        top: 0; left: 0;
+        width: 100vw; height: 100vh;
+        z-index: 500;
+        pointer-events: auto;
+      }
+    </style>
+    ''')
+
+    _cache_v = int(_time.time())
+    ui.add_body_html(
+        f'<div id="qr-scene" data-qr-url="{qr_url}"></div>'
+        f'<script type="module" src="/static/js/qr_view.js?v={_cache_v}"></script>'
+    )
+
+    dashboard_nav(active='qr_code')
 
 
 # ─── Settings (Color Customization) ────────────────────────────────────────

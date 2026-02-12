@@ -46,7 +46,7 @@ def style_page(page_title: str):
 
 
 def dashboard_nav(active='dashboard'):
-    """Bottom navigation bar for dashboard views. active = 'dashboard' | 'card_editor' | 'card_case'."""
+    """Bottom navigation bar for dashboard views. active = 'dashboard' | 'card_editor' | 'card_case' | 'qr_code'."""
     with ui.footer().classes(
         'bg-[#8c52ff] flex justify-around items-center py-3'
     ) as footer:
@@ -54,6 +54,7 @@ def dashboard_nav(active='dashboard'):
             ('badge', '/profile/edit', 'dashboard'),
             ('palette', '/card/editor', 'card_editor'),
             ('collections', '/card/case', 'card_case'),
+            ('qr_code', '/qr', 'qr_code'),
         ]
         for icon, route, key in items:
             color = 'white' if key == active else 'rgba(255,255,255,0.5)'
