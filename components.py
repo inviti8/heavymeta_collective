@@ -66,7 +66,7 @@ def dashboard_nav(active='dashboard'):
 
 def dashboard_header(moniker, member_type, user_id=None,
                      override_enabled=False, override_url='',
-                     ipns_name=None):
+                     ipns_name=None, avatar_cid=None):
     """Shared profile header for dashboard views."""
     moniker_slug = moniker.lower().replace(' ', '-')
     ui.add_head_html('''
@@ -74,6 +74,13 @@ def dashboard_header(moniker, member_type, user_id=None,
       .q-page-container { padding-top: 0 !important; }
       .q-header { transition: transform 0.3s ease !important; }
       .q-footer { transition: transform 0.3s ease !important; }
+      #avatar-scene {
+        position: fixed;
+        border-radius: 50%;
+        overflow: hidden;
+        z-index: 6000;
+        pointer-events: auto;
+      }
     </style>
     ''')
     with ui.header(
@@ -121,7 +128,19 @@ def dashboard_header(moniker, member_type, user_id=None,
             )
 
         with ui.row().classes('items-center gap-4 ml-6 my-2'):
-            ui.image('/static/placeholder.png').classes('w-[8vw] h-[8vw] rounded-full shadow-md')
+            # Layout spacer — the 3D scene overlays this via fixed positioning
+            import config
+            avatar_url = (f'{config.KUBO_GATEWAY}/ipfs/{avatar_cid}'
+                          if avatar_cid else '/static/placeholder.png')
+            ui.element('div').classes('avatar-placeholder shadow-md').style(
+                'width: 8vw; height: 8vw; border-radius: 50%;'
+            )
+            import time as _time
+            _av = int(_time.time())
+            ui.add_body_html(
+                f'<div id="avatar-scene" data-avatar-url="{avatar_url}"></div>'
+                f'<script type="module" src="/static/js/avatar_scene.js?v={_av}"></script>'
+            )
             with ui.column().classes('gap-1'):
                 ui.label(moniker).classes('text-2xl font-bold')
                 badge_text = 'COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER'

@@ -96,6 +96,8 @@ async def init_db():
             "ALTER TABLE profile_colors ADD COLUMN dark_border_color TEXT DEFAULT '#444444'",
             # Dark mode preference
             "ALTER TABLE profile_settings ADD COLUMN dark_mode INTEGER DEFAULT 0",
+            # Avatar
+            "ALTER TABLE users ADD COLUMN avatar_cid TEXT",
         ]
         for sql in migrations:
             try:

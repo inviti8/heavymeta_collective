@@ -241,12 +241,39 @@ async def profile():
     member_type = app.storage.user.get('member_type', 'free')
     psettings = await db.get_profile_settings(user_id)
 
+    avatar_cid = dict(user).get('avatar_cid') if user else None
     header = dashboard_header(moniker, member_type, user_id=user_id,
                               override_enabled=bool(psettings['linktree_override']),
                               override_url=psettings['linktree_url'],
-                              ipns_name=user['ipns_name'])
+                              ipns_name=user['ipns_name'],
+                              avatar_cid=avatar_cid)
     show_dashboard_chrome(header)
     await load_and_apply_theme(user_id)
+
+    # Avatar upload bridge (hidden trigger — same pattern as card editor)
+    async def process_avatar_upload():
+        try:
+            b64 = await ui.run_javascript(
+                'return window.__avatarUploadData', timeout=5.0,
+            )
+        except TimeoutError:
+            ui.notify('Image too large for upload. Try a smaller file.', type='warning')
+            return
+        if not b64:
+            return
+        import base64
+        try:
+            img_bytes = base64.b64decode(b64)
+            old_cid = dict(user).get('avatar_cid') if user else None
+            new_cid = await ipfs_client.replace_asset(img_bytes, old_cid, 'avatar.png')
+            await db.update_user(user_id, avatar_cid=new_cid)
+            ipfs_client.schedule_republish(user_id)
+            ui.notify('Avatar updated', type='positive')
+        except Exception as e:
+            ui.notify(f'Avatar upload failed: {e}', type='negative')
+
+    ui.button(on_click=process_avatar_upload).props(
+        'id=avatar-upload-trigger').style('position:absolute;left:-9999px;')
 
     with ui.column().classes('w-full items-center gap-4 pb-24'):
         # Upgrade CTA for free users
@@ -401,7 +428,6 @@ async def card_editor():
     }}
     </script>
     <style>
-      .q-page-container { padding-top: 0 !important; }
       .q-page, body { background-color: transparent !important; }
       .q-layout { pointer-events: none; }
       .q-footer { pointer-events: auto; }
@@ -508,7 +534,6 @@ async def card_case():
     }}
     </script>
     <style>
-      .q-page-container { padding-top: 0 !important; }
       .q-page, body { background-color: transparent !important; }
       .q-layout { pointer-events: none; }
       .q-footer { pointer-events: auto; }

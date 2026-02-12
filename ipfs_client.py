@@ -263,7 +263,7 @@ async def build_linktree_fresh(user_id: str) -> dict:
         stellar_address=user['stellar_address'],
         links=[dict(link) for link in links],
         colors=colors,
-        avatar_cid=None,
+        avatar_cid=dict(user).get('avatar_cid'),
         card_design_cid=dict(user).get('nfc_image_cid'),
         settings=settings,
     )
@@ -291,7 +291,7 @@ async def republish_linktree(user_id: str) -> str | None:
         stellar_address=user['stellar_address'],
         links=[dict(link) for link in links],
         colors=colors,
-        avatar_cid=None,
+        avatar_cid=dict(user).get('avatar_cid'),
         card_design_cid=dict(user).get('nfc_image_cid'),
         settings=settings,
     )
