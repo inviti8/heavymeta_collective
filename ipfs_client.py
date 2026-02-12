@@ -52,6 +52,12 @@ async def ipfs_unpin(cid: str):
             pass  # already unpinned
 
 
+async def ipfs_gc():
+    """Run garbage collection to reclaim storage from unpinned objects."""
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        await client.post(f"{KUBO_API}/repo/gc")
+
+
 # ── IPNS Key Management ──
 
 async def ipns_key_gen(name: str) -> str:
@@ -321,5 +327,6 @@ async def _safe_republish(user_id: str):
     """Wrapper that catches all exceptions to avoid unhandled task errors."""
     try:
         await republish_linktree(user_id)
+        await ipfs_gc()
     except Exception:
         pass
