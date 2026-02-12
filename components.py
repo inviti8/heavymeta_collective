@@ -64,11 +64,11 @@ def dashboard_nav(active='dashboard'):
             ('qr_code', '/qr', 'qr_code'),
         ]
         for icon, route, key in items:
-            color = 'white' if key == active else 'rgba(255,255,255,0.5)'
+            opacity = '1' if key == active else '0.5'
             ui.button(
                 icon=icon,
                 on_click=lambda r=route: ui.navigate.to(r),
-            ).props(f'flat round').style(f'color: {color}; font-size: 26px;')
+            ).props('flat round').style(f'font-size: 26px; opacity: {opacity};')
     return footer
 
 
@@ -89,6 +89,18 @@ def dashboard_header(moniker, member_type, user_id=None,
         position: fixed;
         z-index: 99999;
         pointer-events: auto;
+      }
+      /* Footer nav buttons — white on primary bg */
+      .q-footer .q-btn,
+      .q-footer .q-btn .q-icon,
+      .q-footer .q-btn .q-btn__content {
+        color: white !important;
+      }
+      /* Header buttons — dark on gradient */
+      .q-header .q-btn,
+      .q-header .q-btn .q-icon,
+      .q-header .q-btn .q-btn__content {
+        color: black !important;
       }
     </style>
     ''')

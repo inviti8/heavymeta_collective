@@ -57,9 +57,24 @@ def apply_theme(primary, secondary, text, bg, card, border):
             .q-field__label, .q-field__native {{
                 color: {text} !important;
             }}
+            /* Footer nav buttons — white on primary background */
+            .q-footer .q-btn,
+            .q-footer .q-btn .q-icon,
+            .q-footer .q-btn .q-btn__content {{
+                color: white !important;
+            }}
+            /* Header buttons — theme text color */
+            .q-header .q-btn,
+            .q-header .q-btn .q-icon,
+            .q-header .q-btn .q-btn__content {{
+                color: {text} !important;
+            }}
         `;
         document.body.style.backgroundColor = '{bg}';
         document.body.style.color = '{text}';
+        // Override Quasar's inline --q-primary/--q-secondary on <body>
+        document.body.style.setProperty('--q-primary', '{primary}');
+        document.body.style.setProperty('--q-secondary', '{secondary}');
     ''')
 
 
