@@ -25,26 +25,26 @@ def open_auth_dialog(initial_tab='login'):
     _current_dialog = None
 
     with ui.dialog().props('persistent') as dialog, \
-         ui.card().classes('w-full max-w-lg mx-auto p-6 gap-0'):
+         ui.card().classes('w-full max-w-lg mx-auto p-4 gap-0'):
 
         # ── Header row ──
-        with ui.row().classes('w-full items-center justify-between mb-4'):
-            ui.label('HEAVYMETA').classes('text-xl font-semibold tracking-wide')
+        with ui.row().classes('w-full items-center justify-between mb-2'):
+            ui.label('HEAVYMETA').classes('text-lg font-semibold tracking-wide')
             ui.button(icon='close', on_click=dialog.close).props('flat round dense')
 
         # ── Top tabs: LOGIN | JOIN ──
-        with ui.tabs().classes('w-full') as tabs:
+        with ui.tabs().classes('w-full').props('dense') as tabs:
             login_tab = ui.tab('LOGIN')
             join_tab = ui.tab('JOIN')
 
         with ui.tab_panels(tabs).classes('w-full'):
 
             # ══════════ LOGIN PANEL ══════════
-            with ui.tab_panel(login_tab):
-                email_login = form_field('EMAIL', 'Enter your email')
-                pw_login = form_field('PASSWORD', 'Enter your password', True)
+            with ui.tab_panel(login_tab).classes('p-2'):
+                email_login = form_field('EMAIL', 'Enter your email', dense=True)
+                pw_login = form_field('PASSWORD', 'Enter your password', True, dense=True)
 
-                login_error = ui.label('').classes('text-red-500 text-sm')
+                login_error = ui.label('').classes('text-red-500 text-xs')
                 login_error.set_visibility(False)
 
                 async def handle_login():
@@ -68,27 +68,40 @@ def open_auth_dialog(initial_tab='login'):
                         login_error.set_visibility(True)
 
                 ui.button('LOGIN', on_click=handle_login).classes(
-                    'mt-8 px-8 py-3 text-lg w-full'
+                    'mt-4 px-6 py-2 text-base w-full'
                 )
 
             # ══════════ JOIN PANEL ══════════
-            with ui.tab_panel(join_tab):
-                moniker = form_field('MONIKER', 'Create a moniker')
-                email_join = form_field('EMAIL', 'Enter your email')
-                pw_join = form_field('PASSWORD', 'Create a password', True)
+            with ui.tab_panel(join_tab).classes('p-2'):
+                moniker = form_field('MONIKER', 'Create a moniker', dense=True)
+                email_join = form_field('EMAIL', 'Enter your email', dense=True)
+                pw_join = form_field('PASSWORD', 'Create a password', True, dense=True)
 
-                with ui.column().classes('w-full gap-1'):
-                    ui.label('MEMBERSHIP TIER').classes('text-base tracking-widest opacity-70')
-                    tier = ui.radio(
-                        {
-                            'free':           'FREE — Linktree only',
-                            'spark':          'SPARK — QR cards, basic access ($29.99 + $49.99/yr)',
-                            'forge':          'FORGE — NFC, Pintheon, full access ($59.99 + $99.99/yr)',
-                            'founding_forge': 'FOUNDING FORGE — Limited to 100 ($79.99 + $49.99/yr locked)',
-                            'anvil':          'ANVIL — Advisory board ($149.99 + $249.99/yr)',
-                        },
-                        value='free',
-                    ).classes('w-full')
+                with ui.column().classes('w-full gap-0'):
+                    ui.label('MEMBERSHIP TIER').classes('text-sm tracking-widest opacity-70')
+
+                    _tier_options = {
+                        'free':           'FREE — Linktree only',
+                        'spark':          'SPARK — $29.99 + $49.99/yr',
+                        'forge':          'FORGE — $59.99 + $99.99/yr',
+                        'founding_forge': 'FOUNDING FORGE — $79.99 + $49.99/yr',
+                        'anvil':          'ANVIL — $149.99 + $249.99/yr',
+                    }
+
+                    tier = ui.select(
+                        _tier_options, value='free',
+                    ).props('outlined dense').classes('w-full')
+
+                    # Description label updates when tier changes
+                    tier_desc = ui.label(TIERS['free']['description']).classes(
+                        'text-xs opacity-60'
+                    )
+
+                    def _on_tier_change():
+                        t = TIERS.get(tier.value, TIERS['free'])
+                        tier_desc.text = t['description']
+
+                    tier.on_value_change(_on_tier_change)
 
                 join_error = ui.label('').classes('text-red-500 text-sm')
                 join_error.set_visibility(False)
@@ -139,7 +152,7 @@ def open_auth_dialog(initial_tab='login'):
                 signup_btn = ui.button(
                     'SIGN UP — FREE',
                     on_click=handle_signup,
-                ).classes('mt-8 px-8 py-3 text-lg w-full')
+                ).classes('mt-4 px-6 py-2 text-base w-full')
 
         # Set initial tab
         tabs.value = initial_tab.upper()
@@ -160,7 +173,9 @@ def _open_payment_dialog(form_data):
     tier_info = TIERS[tier_key]
 
     with ui.dialog().props('persistent') as pay_dialog, \
-         ui.card().classes('w-full max-w-lg mx-auto p-6 gap-0') as pay_card:
+         ui.card().classes('w-full max-w-lg mx-auto p-6 gap-0').style(
+             'max-height: 90vh; overflow-y: auto;'
+         ) as pay_card:
 
         with ui.row().classes('w-full items-center justify-between mb-4'):
             ui.label('PAYMENT').classes('text-xl font-semibold tracking-wide')

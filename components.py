@@ -1,10 +1,13 @@
 from nicegui import ui, app
 
 
-def form_field(label: str, placeholder: str, password=False):
-    with ui.column().classes('w-full gap-1'):
-        ui.label(label).classes('text-base tracking-widest opacity-70')
-        field = ui.input(placeholder).props('outlined')
+def form_field(label: str, placeholder: str, password=False, dense=False):
+    gap = 'gap-0' if dense else 'gap-1'
+    label_cls = 'text-sm tracking-widest opacity-70' if dense else 'text-base tracking-widest opacity-70'
+    props = 'outlined dense' if dense else 'outlined'
+    with ui.column().classes(f'w-full {gap}'):
+        ui.label(label).classes(label_cls)
+        field = ui.input(placeholder).props(props)
         if password:
             field.props('type=password')
         field.classes('w-full')
