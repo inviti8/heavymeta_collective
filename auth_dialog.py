@@ -3,7 +3,10 @@ from auth import validate_signup_form, login_user, set_session, hash_password
 from enrollment import process_free_enrollment, process_paid_enrollment
 from payments.stellar_pay import create_stellar_payment_request, check_payment
 from payments.stripe_pay import create_checkout_session
-from payments.pricing import XLM_COST, async_fetch_xlm_price, fetch_xlm_price
+from payments.pricing import (
+    TIERS, get_tier_price, get_xlm_amount,
+    async_fetch_xlm_price, fetch_xlm_price,
+)
 from components import form_field
 import db
 import uuid as _uuid
@@ -77,7 +80,13 @@ def open_auth_dialog(initial_tab='login'):
                 with ui.column().classes('w-full gap-1'):
                     ui.label('MEMBERSHIP TIER').classes('text-base tracking-widest opacity-70')
                     tier = ui.radio(
-                        {'free': 'FREE — Link-tree only', 'coop': 'COOP MEMBER — Full access'},
+                        {
+                            'free':           'FREE — Linktree only',
+                            'spark':          'SPARK — QR cards, basic access ($29.99 + $49.99/yr)',
+                            'forge':          'FORGE — NFC, Pintheon, full access ($59.99 + $99.99/yr)',
+                            'founding_forge': 'FOUNDING FORGE — Limited to 100 ($79.99 + $49.99/yr locked)',
+                            'anvil':          'ANVIL — Advisory board ($149.99 + $249.99/yr)',
+                        },
                         value='free',
                     ).classes('w-full')
 
@@ -85,10 +94,10 @@ def open_auth_dialog(initial_tab='login'):
                 join_error.set_visibility(False)
 
                 def update_button_text():
-                    if tier.value == 'coop':
-                        signup_btn.text = 'CONTINUE TO PAYMENT'
-                    else:
+                    if tier.value == 'free':
                         signup_btn.text = 'SIGN UP — FREE'
+                    else:
+                        signup_btn.text = 'CONTINUE TO PAYMENT'
 
                 tier.on_value_change(lambda: update_button_text())
 
@@ -116,12 +125,13 @@ def open_auth_dialog(initial_tab='login'):
                             join_error.text = f'Signup failed: {e}'
                             join_error.set_visibility(True)
                     else:
-                        # Coop — close auth dialog, open payment dialog
+                        # Paid tier — close auth dialog, open payment dialog
                         pw_hash = hash_password(pw_join.value)
                         form_data = {
                             'moniker': moniker.value.strip(),
                             'email': email_join.value.strip(),
                             'password_hash': pw_hash,
+                            'tier': tier.value,
                         }
                         dialog.close()
                         _open_payment_dialog(form_data)
@@ -142,10 +152,12 @@ def open_auth_dialog(initial_tab='login'):
 # ─── Payment Dialog ───────────────────────────────────────────────────────────
 
 def _open_payment_dialog(form_data):
-    """Second dialog: XLM/CARD payment tabs for coop signup."""
+    """Second dialog: CARD/XLM/OPUS payment tabs for paid signup."""
     global _current_dialog
 
     _cached_price = None
+    tier_key = form_data.get('tier', 'forge')
+    tier_info = TIERS[tier_key]
 
     with ui.dialog().props('persistent') as pay_dialog, \
          ui.card().classes('w-full max-w-lg mx-auto p-6 gap-0') as pay_card:
@@ -154,23 +166,39 @@ def _open_payment_dialog(form_data):
             ui.label('PAYMENT').classes('text-xl font-semibold tracking-wide')
             ui.button(icon='close', on_click=pay_dialog.close).props('flat round dense')
 
+        ui.label(f'Joining as: {tier_info["label"]}').classes('text-sm font-bold')
+        ui.label(tier_info['description']).classes('text-xs opacity-60 mb-2')
+
         with ui.tabs().classes('w-full') as pay_tabs:
-            xlm_tab = ui.tab('XLM')
             card_tab = ui.tab('CARD')
+            xlm_tab = ui.tab('XLM')
+            opus_tab = ui.tab('OPUS')
+        pay_tabs.value = 'CARD'
 
         with ui.tab_panels(pay_tabs).classes('w-full'):
-            with ui.tab_panel(xlm_tab):
-                xlm_price_label = ui.label(
-                    f'PRICE: {XLM_COST} XLM'
-                ).classes('text-lg font-bold')
-
             with ui.tab_panel(card_tab):
                 card_price_label = ui.label(
                     'PRICE: calculating...'
                 ).classes('text-lg font-bold')
+
+            with ui.tab_panel(xlm_tab):
+                xlm_price_label = ui.label(
+                    'PRICE: calculating...'
+                ).classes('text-lg font-bold')
+                ui.label('Save 50% when you pay with XLM').classes(
+                    'text-sm text-amber-600 font-medium'
+                )
+
+            with ui.tab_panel(opus_tab):
+                opus_price_label = ui.label(
+                    'Coming soon'
+                ).classes('text-lg font-bold')
                 ui.label(
-                    'Join the future. Pay less with crypto.'
-                ).classes('text-sm opacity-70 italic')
+                    'Pay with silk — deepest discount (60% off)'
+                ).classes('text-sm text-amber-600 font-medium')
+                ui.label(
+                    'OPUS payment will be available in a future update.'
+                ).classes('text-xs opacity-60')
 
         pay_error = ui.label('').classes('text-red-500 text-sm')
         pay_error.set_visibility(False)
@@ -182,30 +210,43 @@ def _open_payment_dialog(form_data):
                 return
             price = await async_fetch_xlm_price()
             _cached_price = price
-            usd = round(XLM_COST * price, 2)
-            xlm_price_label.text = f'PRICE: {XLM_COST} XLM (~${usd:.2f} USD)'
-            stripe_usd = round(XLM_COST * price * 2, 2)
-            card_price_label.text = f'PRICE: ${stripe_usd:.2f} USD (2x crypto price)'
+
+            # Card: base USD price
+            card_usd = get_tier_price(tier_key, 'card', 'join')
+            card_price_label.text = f'PRICE: ${card_usd:.2f} USD'
+
+            # XLM: discounted price in XLM
+            xlm_usd = get_tier_price(tier_key, 'xlm', 'join')
+            xlm_amount = round(xlm_usd / price, 2) if price > 0 else 0
+            xlm_price_label.text = f'PRICE: {xlm_amount} XLM (~${xlm_usd:.2f} USD)'
+
             update_pay_button()
 
         def update_pay_button():
             if pay_tabs.value == 'CARD':
-                if _cached_price is not None:
-                    stripe_usd = round(XLM_COST * _cached_price * 2, 2)
-                    pay_btn.text = f'SIGN UP — PAY ${stripe_usd:.2f}'
+                usd = get_tier_price(tier_key, 'card', 'join')
+                pay_btn.text = f'SIGN UP — PAY ${usd:.2f}'
+                pay_btn.enable()
+            elif pay_tabs.value == 'XLM':
+                xlm_usd = get_tier_price(tier_key, 'xlm', 'join')
+                if _cached_price and _cached_price > 0:
+                    xlm_amt = round(xlm_usd / _cached_price, 2)
+                    pay_btn.text = f'SIGN UP — PAY {xlm_amt} XLM'
                 else:
-                    pay_btn.text = 'SIGN UP — PAY BY CARD'
-            else:
-                pay_btn.text = f'SIGN UP — PAY {XLM_COST} XLM'
+                    pay_btn.text = 'SIGN UP — PAY WITH XLM'
+                pay_btn.enable()
+            elif pay_tabs.value == 'OPUS':
+                pay_btn.text = 'COMING SOON'
+                pay_btn.disable()
 
         pay_tabs.on_value_change(lambda: update_pay_button())
 
         async def handle_pay():
             pay_error.set_visibility(False)
 
-            if pay_tabs.value != 'CARD':
+            if pay_tabs.value == 'XLM':
                 # XLM payment — transition to QR view
-                pay_req = create_stellar_payment_request()
+                pay_req = create_stellar_payment_request(tier_key=tier_key)
                 pending = {
                     **form_data,
                     'order_id': pay_req['order_id'],
@@ -216,7 +257,7 @@ def _open_payment_dialog(form_data):
                 }
                 app.storage.user['pending_signup'] = pending
                 _show_xlm_payment(pay_card, pending, pay_dialog)
-            else:
+            elif pay_tabs.value == 'CARD':
                 # Stripe payment — user created by webhook after payment confirmed
                 try:
                     order_id = f"stripe-{_uuid.uuid4().hex[:8]}"
@@ -225,10 +266,12 @@ def _open_payment_dialog(form_data):
                         email=form_data['email'],
                         moniker=form_data['moniker'],
                         password_hash=form_data['password_hash'],
+                        tier_key=tier_key,
                     )
-                    # Store email so /join/success can poll by email
+                    # Store email + tier so /join/success can poll by email
                     app.storage.user['pending_stripe'] = {
                         'email': form_data['email'],
+                        'tier': tier_key,
                     }
                     pay_dialog.close()
                     await ui.run_javascript(
@@ -238,8 +281,9 @@ def _open_payment_dialog(form_data):
                     pay_error.text = f'Payment setup failed: {e}'
                     pay_error.set_visibility(True)
 
+        card_usd = get_tier_price(tier_key, 'card', 'join')
         pay_btn = ui.button(
-            f'SIGN UP — PAY {XLM_COST} XLM',
+            f'SIGN UP — PAY ${card_usd:.2f}',
             on_click=handle_pay,
         ).classes('mt-8 px-8 py-3 text-lg w-full')
 
@@ -310,6 +354,7 @@ def _show_xlm_payment(pay_card, pending, pay_dialog):
 
                 try:
                     xlm_price = fetch_xlm_price()
+                    tier = pending.get('tier', 'forge')
                     user_id, stellar_address = await process_paid_enrollment(
                         email=pending['email'],
                         moniker=pending['moniker'],
@@ -317,6 +362,7 @@ def _show_xlm_payment(pay_card, pending, pay_dialog):
                         order_id=pending['order_id'],
                         payment_method='stellar',
                         tx_hash=result['hash'],
+                        tier_key=tier,
                         xlm_price_usd=xlm_price,
                     )
                     user = await db.get_user_by_id(user_id)

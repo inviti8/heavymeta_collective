@@ -64,7 +64,10 @@ async def process_free_enrollment(moniker, email, password):
 
 
 async def process_paid_enrollment(email, moniker, password_hash, order_id,
-                                  payment_method, tx_hash, xlm_price_usd=None):
+                                  payment_method, tx_hash, tier_key='forge',
+                                  xlm_price_usd=None):
+    from payments.pricing import get_tier_price
+
     # 1. Generate user's Stellar keypair
     user_keys = Keypair.random()
     user_25519 = Stellar25519KeyPair(user_keys)
@@ -82,7 +85,7 @@ async def process_paid_enrollment(email, moniker, password_hash, order_id,
         user_id=user_id,
         email=email.strip(),
         moniker=moniker.strip(),
-        member_type='coop',
+        member_type=tier_key,
         password_hash=password_hash,
         stellar_address=user_keys.public_key,
         shared_pub=user_25519.public_key(),
@@ -91,12 +94,11 @@ async def process_paid_enrollment(email, moniker, password_hash, order_id,
     )
 
     # 5. Store payment record
-    from payments.pricing import XLM_COST
-    amount = str(XLM_COST) if payment_method == 'stellar' else str(xlm_price_usd or '')
+    price_usd = get_tier_price(tier_key, payment_method if payment_method == 'stellar' else 'card', 'join')
     await db.create_payment(
         user_id=user_id,
         method=payment_method,
-        amount=amount,
+        amount=str(price_usd),
         xlm_price_usd=xlm_price_usd,
         memo=order_id,
         tx_hash=tx_hash,
@@ -117,7 +119,7 @@ async def process_paid_enrollment(email, moniker, password_hash, order_id,
 
     # 8. IPNS key + initial linktree
     try:
-        await _setup_ipns(user_id, moniker.strip(), 'coop', user_keys.public_key)
+        await _setup_ipns(user_id, moniker.strip(), tier_key, user_keys.public_key)
     except Exception:
         pass  # IPFS setup can be retried later
 
@@ -125,8 +127,10 @@ async def process_paid_enrollment(email, moniker, password_hash, order_id,
 
 
 async def finalize_pending_enrollment(user_id, order_id, payment_method, tx_hash,
-                                      xlm_price_usd=None):
+                                      tier_key='forge', xlm_price_usd=None):
     """For Stripe webhook — user already exists as pending, now complete enrollment."""
+    from payments.pricing import get_tier_price
+
     user = await db.get_user_by_id(user_id)
     if not user:
         return None
@@ -142,7 +146,7 @@ async def finalize_pending_enrollment(user_id, order_id, payment_method, tx_hash
     # Update user with Stellar details
     await db.update_user(
         user_id,
-        member_type='coop',
+        member_type=tier_key,
         stellar_address=user_keys.public_key,
         shared_pub=user_25519.public_key(),
         encrypted_token=encrypted_secret.decode() if isinstance(encrypted_secret, bytes) else encrypted_secret,
@@ -150,12 +154,11 @@ async def finalize_pending_enrollment(user_id, order_id, payment_method, tx_hash
     )
 
     # Store payment
-    from payments.pricing import XLM_COST
-    amount = str(XLM_COST) if payment_method == 'stellar' else str(xlm_price_usd or '')
+    price_usd = get_tier_price(tier_key, payment_method if payment_method == 'stellar' else 'card', 'join')
     await db.create_payment(
         user_id=user_id,
         method=payment_method,
-        amount=amount,
+        amount=str(price_usd),
         xlm_price_usd=xlm_price_usd,
         memo=order_id,
         tx_hash=tx_hash,
@@ -176,7 +179,7 @@ async def finalize_pending_enrollment(user_id, order_id, payment_method, tx_hash
 
     # IPNS key + initial linktree
     try:
-        await _setup_ipns(user_id, user['moniker'], 'coop', user_keys.public_key)
+        await _setup_ipns(user_id, user['moniker'], tier_key, user_keys.public_key)
     except Exception:
         pass  # IPFS setup can be retried later
 

@@ -9,7 +9,7 @@ from components import (
     dashboard_nav, dashboard_header,
     hide_dashboard_chrome, show_dashboard_chrome,
 )
-from auth import set_session, require_auth, require_coop
+from auth import set_session, require_auth, require_paid
 from enrollment import process_paid_enrollment, finalize_pending_enrollment
 from payments.stripe_pay import handle_webhook, retrieve_checkout_session
 from auth_dialog import open_auth_dialog
@@ -43,9 +43,11 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail='Invalid signature')
 
     if result.get('completed'):
-        # Idempotency: skip if user already upgraded to coop
+        tier_key = result.get('tier', 'forge')
+
+        # Idempotency: skip if user already has a paid tier
         existing = await db.get_user_by_email(result['email'])
-        if existing and existing['member_type'] == 'coop':
+        if existing and existing['member_type'] != 'free':
             return {'status': 'ok'}
 
         if existing:
@@ -55,7 +57,7 @@ async def stripe_webhook(request: Request):
                 order_id=result['order_id'],
                 payment_method='stripe',
                 tx_hash=result['payment_intent'],
-                xlm_price_usd=result.get('xlm_price_usd'),
+                tier_key=tier_key,
             )
         else:
             # New flow: no user in DB yet — create from scratch
@@ -66,7 +68,7 @@ async def stripe_webhook(request: Request):
                 order_id=result['order_id'],
                 payment_method='stripe',
                 tx_hash=result['payment_intent'],
-                xlm_price_usd=result.get('xlm_price_usd'),
+                tier_key=tier_key,
             )
     return {'status': 'ok'}
 
@@ -114,8 +116,8 @@ def pay_xlm():
 @ui.page('/join/success')
 async def join_success(session_id: str = ''):
     """Stripe redirects here after checkout. Verifies payment and triggers enrollment."""
-    # If already logged in as coop, go straight to dashboard
-    if app.storage.user.get('authenticated') and app.storage.user.get('member_type') == 'coop':
+    # If already logged in as a paid tier, go straight to dashboard
+    if app.storage.user.get('authenticated') and app.storage.user.get('member_type') != 'free':
         ui.navigate.to('/profile/edit')
         return
 
@@ -155,7 +157,7 @@ async def join_success(session_id: str = ''):
         elif user_id:
             user = await db.get_user_by_id(user_id)
 
-        if user and user['member_type'] == 'coop':
+        if user and user['member_type'] != 'free':
             timer.deactivate()
             spinner.set_visibility(False)
             set_session(dict(user))
@@ -176,10 +178,11 @@ async def join_success(session_id: str = ''):
 
             _enrollment_triggered = True
             status_label.text = 'Payment confirmed — setting up your account...'
+            tier_key = result.get('tier', 'forge')
 
             # Idempotency: check if user was created between polls
             existing = await db.get_user_by_email(result['email'])
-            if existing and existing['member_type'] == 'coop':
+            if existing and existing['member_type'] != 'free':
                 timer.deactivate()
                 spinner.set_visibility(False)
                 set_session(dict(existing))
@@ -196,7 +199,7 @@ async def join_success(session_id: str = ''):
                         order_id=result['order_id'],
                         payment_method='stripe',
                         tx_hash=result['payment_intent'],
-                        xlm_price_usd=result.get('xlm_price_usd'),
+                        tier_key=tier_key,
                     )
                     user = await db.get_user_by_id(existing['id'])
                 else:
@@ -208,7 +211,7 @@ async def join_success(session_id: str = ''):
                         order_id=result['order_id'],
                         payment_method='stripe',
                         tx_hash=result['payment_intent'],
-                        xlm_price_usd=result.get('xlm_price_usd'),
+                        tier_key=tier_key,
                     )
                     user = await db.get_user_by_id(new_user_id)
 
@@ -298,8 +301,8 @@ async def profile():
         # Upgrade CTA for free users
         if member_type == 'free':
             with ui.card().classes('w-[75vw] bg-gradient-to-r from-purple-100 to-yellow-100'):
-                ui.label('Join the Coop').classes('text-xl font-bold')
-                ui.label('Get full access, NFC card, and Pintheon node credentials.').classes('text-sm opacity-70')
+                ui.label('Upgrade Your Membership').classes('text-xl font-bold')
+                ui.label('Choose Spark, Forge, or Anvil for full access, NFC cards, and more.').classes('text-sm opacity-70')
                 ui.button('UPGRADE', on_click=lambda: open_auth_dialog('join')).classes('mt-2')
 
         # ── Links section with CRUD ──
@@ -416,8 +419,9 @@ async def profile():
                         ui.button('Delete', on_click=do_delete).props('color=red')
                 dialog.open()
 
-        # Wallets section (coop only)
-        if member_type == 'coop':
+        # Wallets section (paid tiers + network features enabled)
+        show_network = bool(psettings.get('show_network', 0))
+        if member_type != 'free' and show_network:
             with ui.column().classes('w-[75vw] gap-2 border p-4 rounded-lg'):
                 ui.label('WALLETS').classes('text-2xl font-bold')
 
@@ -847,8 +851,13 @@ async def settings():
                     with ui.element('div').classes('px-3 py-1 rounded-lg').style(
                         'display: inline-block; width: fit-content;'
                     ) as preview_badge:
+                        _PREVIEW_BADGES = {
+                            'free': 'FREE MEMBER', 'spark': 'SPARK MEMBER',
+                            'forge': 'FORGE MEMBER', 'founding_forge': 'FOUNDING FORGE',
+                            'anvil': 'ANVIL MEMBER',
+                        }
                         preview_badge_label = ui.label(
-                            'COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER'
+                            _PREVIEW_BADGES.get(member_type, member_type.upper())
                         ).classes('text-xs font-bold')
                     preview_link1 = ui.label('example-link.com').classes('font-semibold')
                     preview_link2 = ui.label('another-link.com').classes('font-semibold')
@@ -941,6 +950,7 @@ async def settings():
                         linktree_override=psettings['linktree_override'],
                         linktree_url=psettings['linktree_url'],
                         dark_mode=int(mode_toggle.value),
+                        show_network=int(network_toggle.value),
                     )
                     await regenerate_qr(user_id)
                     await regenerate_all_link_qrs(user_id)
@@ -952,8 +962,23 @@ async def settings():
                     'mt-4 px-8 py-3 text-lg'
                 )
 
-            # ── WALLET expansion (coop only) ──
-            if member_type == 'coop':
+            # ── Stellar Network toggle (paid tiers only) ──
+            if member_type != 'free':
+                with ui.row().classes('w-full items-center justify-between'):
+                    with ui.column().classes('gap-0'):
+                        ui.label('STELLAR NETWORK').classes('text-base font-bold')
+                        ui.label(
+                            'Show wallet, balances, and network features'
+                        ).classes('text-xs opacity-60')
+                    network_toggle = ui.switch(
+                        '', value=bool(psettings.get('show_network', 0))
+                    )
+            else:
+                # Free users: hidden toggle placeholder (used by save_settings)
+                network_toggle = type('Toggle', (), {'value': False})()
+
+            # ── WALLET expansion (paid tiers + network toggle on) ──
+            if member_type != 'free' and bool(psettings.get('show_network', 0)):
                 with ui.expansion('WALLET', icon='account_balance_wallet').classes(
                     'w-full'
                 ):
@@ -1197,7 +1222,7 @@ async def public_profile(moniker_slug: str):
 
 @ui.page('/launch')
 async def launch():
-    if not require_coop():
+    if not require_paid():
         return
 
     ui.page_title('Launch Credentials')
@@ -1206,12 +1231,28 @@ async def launch():
     user = await db.get_user_by_id(user_id)
     await load_and_apply_theme(user_id)
 
+    # Soft gate: prompt to enable Stellar Network if toggle is off
+    psettings_launch = await db.get_profile_settings(user_id)
+    show_network = bool(psettings_launch.get('show_network', 0))
+
     with ui.column(
     ).classes('w-full items-center gap-8 mt-12'
     ).style('padding-inline: clamp(1rem, 25vw, 50rem);'):
         ui.button(icon='chevron_left', on_click=lambda: ui.navigate.back()).props(
             'flat round'
         ).classes('self-start text-black opacity-70')
+
+        if not show_network:
+            ui.label('STELLAR NETWORK REQUIRED').classes('text-3xl font-semibold tracking-wide')
+            with ui.card().classes('w-full p-6 gap-4'):
+                ui.label(
+                    'Enable Stellar Network features in Settings to access your Pintheon node credentials.'
+                ).classes('text-base')
+                ui.button(
+                    'OPEN SETTINGS', on_click=lambda: ui.navigate.to('/settings')
+                ).classes('mt-2 px-8 py-3 text-lg')
+            return
+
         ui.label('YOUR PINTHEON NODE CREDENTIALS').classes('text-3xl font-semibold tracking-wide')
 
         with ui.card().classes('w-full p-6 gap-4'):

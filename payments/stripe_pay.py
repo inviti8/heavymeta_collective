@@ -1,13 +1,15 @@
 import stripe
 from config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
-from payments.pricing import get_stripe_price_cents, fetch_xlm_price
+from payments.pricing import TIERS, get_tier_price
 
 stripe.api_key = STRIPE_SECRET_KEY
 
 
-def create_checkout_session(order_id, email, moniker, password_hash, base_url='http://localhost:8080'):
-    price_cents = get_stripe_price_cents()
-    xlm_price = fetch_xlm_price()
+def create_checkout_session(order_id, email, moniker, password_hash,
+                            tier_key='forge', base_url='http://localhost:8080'):
+    tier = TIERS[tier_key]
+    price_usd = get_tier_price(tier_key, 'card', 'join')
+    price_cents = int(price_usd * 100)
 
     session = stripe.checkout.Session.create(
         payment_method_types=['card'],
@@ -16,8 +18,8 @@ def create_checkout_session(order_id, email, moniker, password_hash, base_url='h
                 'currency': 'usd',
                 'unit_amount': price_cents,
                 'product_data': {
-                    'name': 'Heavymeta Collective — Coop Membership',
-                    'description': 'Full access membership with NFC card and Pintheon node',
+                    'name': f'Heavymeta Collective — {tier["label"]} Membership',
+                    'description': tier['description'],
                 },
             },
             'quantity': 1,
@@ -31,7 +33,7 @@ def create_checkout_session(order_id, email, moniker, password_hash, base_url='h
             'email': email,
             'moniker': moniker,
             'password_hash': password_hash,
-            'xlm_price_usd': str(xlm_price),
+            'tier': tier_key,
         },
     )
     return session
@@ -47,7 +49,7 @@ def retrieve_checkout_session(session_id):
         'moniker': cs.metadata['moniker'],
         'password_hash': cs.metadata['password_hash'],
         'order_id': cs.metadata['order_id'],
-        'xlm_price_usd': float(cs.metadata.get('xlm_price_usd', 0)),
+        'tier': cs.metadata.get('tier', 'forge'),
         'payment_intent': cs.payment_intent or '',
     }
 
@@ -65,7 +67,7 @@ def handle_webhook(payload, sig_header):
             'moniker': session['metadata']['moniker'],
             'password_hash': session['metadata']['password_hash'],
             'order_id': session['metadata']['order_id'],
-            'xlm_price_usd': float(session['metadata'].get('xlm_price_usd', 0)),
+            'tier': session['metadata'].get('tier', 'forge'),
             'payment_intent': session.get('payment_intent', ''),
         }
 

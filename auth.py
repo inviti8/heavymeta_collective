@@ -86,13 +86,18 @@ def require_auth():
     return True
 
 
-def require_coop():
+def require_paid():
+    """Guard: any paid tier (not 'free')."""
     if not require_auth():
         return False
-    if app.storage.user.get('member_type') != 'coop':
+    if app.storage.user.get('member_type') in ('free',):
         ui.navigate.to('/join')
         return False
     return True
+
+
+# Alias for backwards compatibility
+require_coop = require_paid
 
 
 async def validate_signup_form(moniker, email, password):

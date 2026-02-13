@@ -118,6 +118,10 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN qr_code_cid TEXT",
             # Per-link QR codes
             "ALTER TABLE link_tree ADD COLUMN qr_cid TEXT",
+            # show_network toggle for crypto/Stellar features
+            "ALTER TABLE profile_settings ADD COLUMN show_network INTEGER DEFAULT 0",
+            # Migrate binary 'coop' → named tier 'forge'
+            "UPDATE users SET member_type = 'forge' WHERE member_type = 'coop'",
         ]
         for sql in migrations:
             try:
@@ -189,6 +193,15 @@ async def check_email_available(email):
     async with aiosqlite.connect(DATABASE_PATH) as conn:
         cursor = await conn.execute("SELECT 1 FROM users WHERE email = ?", (email,))
         return await cursor.fetchone() is None
+
+
+async def count_members_by_type(member_type):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        cursor = await conn.execute(
+            "SELECT COUNT(*) FROM users WHERE member_type = ?", (member_type,)
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
 
 
 async def update_user(user_id, **fields):
@@ -340,6 +353,7 @@ _SETTINGS_DEFAULTS = {
     'linktree_override': 0,
     'linktree_url': '',
     'dark_mode': 0,
+    'show_network': 0,
 }
 
 
@@ -357,17 +371,20 @@ async def get_profile_settings(user_id):
 
 
 async def upsert_profile_settings(user_id, linktree_override, linktree_url,
-                                   dark_mode=None):
+                                   dark_mode=None, show_network=None):
     async with aiosqlite.connect(DATABASE_PATH) as conn:
         await conn.execute(
-            """INSERT INTO profile_settings (user_id, linktree_override, linktree_url, dark_mode)
-               VALUES (?, ?, ?, ?)
+            """INSERT INTO profile_settings
+                   (user_id, linktree_override, linktree_url, dark_mode, show_network)
+               VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(user_id) DO UPDATE SET
                    linktree_override = excluded.linktree_override,
                    linktree_url = excluded.linktree_url,
-                   dark_mode = excluded.dark_mode""",
+                   dark_mode = excluded.dark_mode,
+                   show_network = excluded.show_network""",
             (user_id, int(linktree_override), linktree_url,
-             int(dark_mode) if dark_mode is not None else 0),
+             int(dark_mode) if dark_mode is not None else 0,
+             int(show_network) if show_network is not None else 0),
         )
         await conn.commit()
 

@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from payments.pricing import (
-    fetch_xlm_price, get_xlm_usd_equivalent, get_stripe_price_cents,
-    get_stripe_price_display, XLM_COST, _price_cache,
+    fetch_xlm_price, get_tier_price, get_xlm_amount,
+    TIERS, DISCOUNTS, _price_cache,
 )
 
 
@@ -31,36 +31,47 @@ def test_fetch_xlm_price_fallback(mock_get):
     assert price == 0.10  # fallback
 
 
+def test_get_tier_price_card():
+    # Card = base price, no discount
+    assert get_tier_price('forge', 'card', 'join') == 59.99
+    assert get_tier_price('spark', 'card', 'join') == 29.99
+    assert get_tier_price('free', 'card', 'join') == 0
+
+
+def test_get_tier_price_xlm():
+    # XLM = 50% off
+    assert get_tier_price('forge', 'xlm', 'join') == 30.0
+    assert get_tier_price('spark', 'xlm', 'join') == 14.99
+
+
+def test_get_tier_price_opus():
+    # OPUS = 60% off
+    assert get_tier_price('forge', 'opus', 'join') == 24.0
+    assert get_tier_price('anvil', 'opus', 'join') == 60.0
+
+
 @patch('payments.pricing.requests.get')
-def test_get_xlm_usd_equivalent(mock_get):
+def test_get_xlm_amount(mock_get):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {"stellar": {"usd": 0.20}}
     mock_resp.raise_for_status = MagicMock()
     mock_get.return_value = mock_resp
 
-    equiv = get_xlm_usd_equivalent()
-    assert equiv == round(333 * 0.20, 2)
+    xlm = get_xlm_amount('forge', 'join')
+    # forge XLM price = 59.99 * 0.5 = 30.00, at $0.20/XLM = 150 XLM
+    assert xlm == 150.0
 
 
-@patch('payments.pricing.requests.get')
-def test_get_stripe_price_cents(mock_get):
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {"stellar": {"usd": 0.15}}
-    mock_resp.raise_for_status = MagicMock()
-    mock_get.return_value = mock_resp
-
-    cents = get_stripe_price_cents()
-    expected = int(333 * 0.15 * 2 * 100)
-    assert cents == expected
+def test_tiers_dict():
+    assert 'free' in TIERS
+    assert 'spark' in TIERS
+    assert 'forge' in TIERS
+    assert 'founding_forge' in TIERS
+    assert 'anvil' in TIERS
+    assert TIERS['free']['join_usd'] == 0
 
 
-@patch('payments.pricing.requests.get')
-def test_get_stripe_price_display(mock_get):
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {"stellar": {"usd": 0.15}}
-    mock_resp.raise_for_status = MagicMock()
-    mock_get.return_value = mock_resp
-
-    display = get_stripe_price_display()
-    assert display.startswith('$')
-    assert '.' in display
+def test_discounts_dict():
+    assert DISCOUNTS['card'] == 0.0
+    assert DISCOUNTS['xlm'] == 0.50
+    assert DISCOUNTS['opus'] == 0.60

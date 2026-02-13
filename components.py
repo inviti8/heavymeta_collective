@@ -44,7 +44,7 @@ def style_page(page_title: str):
         if authenticated:
             member_type = app.storage.user.get('member_type', 'free')
             ui.button('Profile', on_click=lambda: ui.navigate.to('/profile/edit')).props('flat color=white')
-            if member_type == 'coop':
+            if member_type != 'free':
                 ui.button('Launch', on_click=lambda: ui.navigate.to('/launch')).props('flat color=white')
             ui.button('Logout', on_click=lambda: _logout()).props('flat color=white')
         else:
@@ -164,7 +164,12 @@ def dashboard_header(moniker, member_type, user_id=None,
             )
             with ui.column().classes('gap-1'):
                 ui.label(moniker).classes('text-2xl font-bold')
-                badge_text = 'COOP MEMBER' if member_type == 'coop' else 'FREE MEMBER'
+                _BADGE_LABELS = {
+                    'free': 'FREE MEMBER', 'spark': 'SPARK MEMBER',
+                    'forge': 'FORGE MEMBER', 'founding_forge': 'FOUNDING FORGE',
+                    'anvil': 'ANVIL MEMBER',
+                }
+                badge_text = _BADGE_LABELS.get(member_type, member_type.upper())
                 with ui.element('div').classes(
                     'bg-[#ffde59] px-3 py-1 rounded-lg shadow-md'
                 ).style('display: inline-block; width: fit-content;'):

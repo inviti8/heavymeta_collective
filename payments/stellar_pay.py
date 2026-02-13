@@ -8,8 +8,8 @@ from qrcode.image.styles.moduledrawers.pil import RoundedModuleDrawer
 from qrcode.image.styles.colormasks import SolidFillColorMask
 from stellar_sdk import Server
 from config import BANKER_PUB, HORIZON_URL
+from payments.pricing import get_xlm_amount
 
-XLM_COST = "333"
 server = Server(horizon_url=HORIZON_URL)
 
 STELLAR_LOGO = os.path.join(os.path.dirname(__file__), '..', 'static', 'stellar_logo.png')
@@ -40,14 +40,15 @@ def generate_stellar_qr(uri):
     return f"data:image/png;base64,{b64}"
 
 
-def create_stellar_payment_request():
+def create_stellar_payment_request(tier_key='forge'):
     order_id = str(uuid.uuid4())[:8]
     memo = f"hvym-{order_id}"
+    xlm_amount = str(get_xlm_amount(tier_key, 'join'))
 
     stellar_uri = (
         f"web+stellar:pay"
         f"?destination={BANKER_PUB}"
-        f"&amount={XLM_COST}"
+        f"&amount={xlm_amount}"
         f"&asset_code=XLM"
         f"&memo={memo}"
     )
@@ -60,7 +61,7 @@ def create_stellar_payment_request():
         'uri': stellar_uri,
         'qr': qr_data_uri,
         'address': BANKER_PUB,
-        'amount': XLM_COST,
+        'amount': xlm_amount,
     }
 
 
