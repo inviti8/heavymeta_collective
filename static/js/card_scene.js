@@ -151,6 +151,25 @@ canvas.addEventListener('pointerup', () => {
   }
 });
 
+// ─── Cart button (checkout trigger) ─────────────────────────────────────────
+
+const cartBtn = document.createElement('button');
+cartBtn.innerHTML = '<span class="material-icons" style="font-size:28px;">shopping_cart</span>';
+cartBtn.style.cssText = `
+  position: fixed; top: 16px; right: 16px; z-index: 6000;
+  width: 52px; height: 52px; border-radius: 50%;
+  background: rgba(140, 82, 255, 0.85); border: none; cursor: pointer;
+  color: white; display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px); box-shadow: 0 2px 12px rgba(140,82,255,0.4);
+`;
+cartBtn.addEventListener('click', () => {
+  const trigger = document.getElementById('card-checkout-trigger');
+  if (trigger) trigger.click();
+});
+document.body.appendChild(cartBtn);
+
+// ─── File change handler ────────────────────────────────────────────────────
+
 fileInput.addEventListener('change', () => {
   const file = fileInput.files[0];
   if (!file) return;

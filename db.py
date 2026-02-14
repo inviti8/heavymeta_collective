@@ -85,6 +85,34 @@ CREATE TABLE IF NOT EXISTS denom_wallets (
     payout_hash     TEXT,
     fee_xlm         REAL
 );
+
+CREATE TABLE IF NOT EXISTS user_cards (
+    id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL REFERENCES users(id),
+    front_image_cid TEXT,
+    back_image_cid  TEXT,
+    status          TEXT DEFAULT 'draft',
+    is_active       INTEGER DEFAULT 0,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS card_orders (
+    id               TEXT PRIMARY KEY,
+    user_id          TEXT NOT NULL REFERENCES users(id),
+    card_id          TEXT NOT NULL REFERENCES user_cards(id),
+    payment_method   TEXT,
+    payment_status   TEXT DEFAULT 'pending',
+    tx_hash          TEXT,
+    amount_usd       REAL,
+    shipping_name    TEXT,
+    shipping_street  TEXT,
+    shipping_city    TEXT,
+    shipping_state   TEXT,
+    shipping_zip     TEXT,
+    shipping_country TEXT,
+    order_status     TEXT DEFAULT 'pending',
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -122,6 +150,12 @@ async def init_db():
             "ALTER TABLE profile_settings ADD COLUMN show_network INTEGER DEFAULT 0",
             # Migrate binary 'coop' → named tier 'forge'
             "UPDATE users SET member_type = 'forge' WHERE member_type = 'coop'",
+            # Migrate existing card images from users into user_cards
+            """INSERT INTO user_cards (id, user_id, front_image_cid, back_image_cid, status, is_active)
+               SELECT hex(randomblob(16)), id, nfc_image_cid, nfc_back_image_cid, 'ordered', 1
+               FROM users
+               WHERE nfc_image_cid IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM user_cards WHERE user_cards.user_id = users.id)""",
         ]
         for sql in migrations:
             try:
@@ -416,10 +450,12 @@ async def get_peer_cards(owner_id):
     async with aiosqlite.connect(DATABASE_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
-            """SELECT u.moniker, u.nfc_image_cid, u.nfc_back_image_cid,
+            """SELECT u.moniker, uc.front_image_cid AS nfc_image_cid,
+                      uc.back_image_cid AS nfc_back_image_cid,
                       u.ipns_name, u.member_type, u.id as peer_id
                FROM peer_cards pc
                JOIN users u ON u.id = pc.peer_id
+               LEFT JOIN user_cards uc ON uc.user_id = u.id AND uc.is_active = 1
                WHERE pc.owner_id = ?
                ORDER BY pc.collected_at""",
             (owner_id,),
@@ -498,4 +534,147 @@ async def discard_denom_wallet(wallet_id):
             "UPDATE denom_wallets SET status = 'discarded' WHERE id = ?",
             (wallet_id,),
         )
+        await conn.commit()
+
+
+# --- User Cards ---
+
+async def create_user_card(user_id):
+    card_id = str(uuid.uuid4())
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            "INSERT INTO user_cards (id, user_id) VALUES (?, ?)",
+            (card_id, user_id),
+        )
+        await conn.commit()
+    return card_id
+
+
+async def get_draft_card(user_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM user_cards WHERE user_id = ? AND status = 'draft' LIMIT 1",
+            (user_id,),
+        )
+        return await cursor.fetchone()
+
+
+async def get_user_cards(user_id, exclude_draft=False):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        if exclude_draft:
+            cursor = await conn.execute(
+                "SELECT * FROM user_cards WHERE user_id = ? AND status != 'draft' ORDER BY created_at DESC",
+                (user_id,),
+            )
+        else:
+            cursor = await conn.execute(
+                "SELECT * FROM user_cards WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            )
+        return await cursor.fetchall()
+
+
+async def get_active_card(user_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM user_cards WHERE user_id = ? AND is_active = 1",
+            (user_id,),
+        )
+        return await cursor.fetchone()
+
+
+async def update_card_images(card_id, **fields):
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [card_id]
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            f"UPDATE user_cards SET {set_clause} WHERE id = ?", values
+        )
+        await conn.commit()
+
+
+async def set_active_card(user_id, card_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            "UPDATE user_cards SET is_active = 0 WHERE user_id = ?",
+            (user_id,),
+        )
+        await conn.execute(
+            "UPDATE user_cards SET is_active = 1 WHERE id = ? AND user_id = ?",
+            (card_id, user_id),
+        )
+        await conn.commit()
+
+
+async def count_ordered_cards(user_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        cursor = await conn.execute(
+            "SELECT COUNT(*) FROM user_cards WHERE user_id = ? AND status != 'draft'",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def create_card_order(*, user_id, card_id, payment_method, amount_usd,
+                            shipping_name, shipping_street, shipping_city,
+                            shipping_state, shipping_zip, shipping_country,
+                            tx_hash=None, payment_status='pending'):
+    order_id = str(uuid.uuid4())
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            """INSERT INTO card_orders
+               (id, user_id, card_id, payment_method, payment_status, tx_hash,
+                amount_usd, shipping_name, shipping_street, shipping_city,
+                shipping_state, shipping_zip, shipping_country)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (order_id, user_id, card_id, payment_method, payment_status,
+             tx_hash, amount_usd, shipping_name, shipping_street,
+             shipping_city, shipping_state, shipping_zip, shipping_country),
+        )
+        await conn.commit()
+    return order_id
+
+
+async def finalize_card_order(order_id, tx_hash=None):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        # Mark order as paid
+        if tx_hash:
+            await conn.execute(
+                "UPDATE card_orders SET payment_status = 'paid', tx_hash = ? WHERE id = ?",
+                (tx_hash, order_id),
+            )
+        else:
+            await conn.execute(
+                "UPDATE card_orders SET payment_status = 'paid' WHERE id = ?",
+                (order_id,),
+            )
+        # Get order to find card_id and user_id
+        cursor = await conn.execute(
+            "SELECT * FROM card_orders WHERE id = ?", (order_id,)
+        )
+        order = await cursor.fetchone()
+        if order:
+            card_id = order['card_id']
+            user_id = order['user_id']
+            # Mark card as ordered
+            await conn.execute(
+                "UPDATE user_cards SET status = 'ordered' WHERE id = ?",
+                (card_id,),
+            )
+            # Set as active card
+            await conn.execute(
+                "UPDATE user_cards SET is_active = 0 WHERE user_id = ?",
+                (user_id,),
+            )
+            await conn.execute(
+                "UPDATE user_cards SET is_active = 1 WHERE id = ?",
+                (card_id,),
+            )
         await conn.commit()

@@ -11,7 +11,9 @@ from components import (
 )
 from auth import set_session, require_auth, require_paid
 from enrollment import process_paid_enrollment, finalize_pending_enrollment
-from payments.stripe_pay import handle_webhook, retrieve_checkout_session
+from payments.stripe_pay import (
+    handle_webhook, retrieve_checkout_session, create_card_checkout_session,
+)
 from auth_dialog import open_auth_dialog
 from launch import generate_launch_credentials
 from stellar_ops import get_xlm_balance, send_xlm
@@ -43,6 +45,18 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail='Invalid signature')
 
     if result.get('completed'):
+        purchase_type = result.get('purchase_type', 'enrollment')
+
+        if purchase_type == 'card':
+            # Card purchase — finalize card order
+            order_id = result.get('order_id')
+            if order_id:
+                await db.finalize_card_order(
+                    order_id, tx_hash=result.get('payment_intent')
+                )
+            return {'status': 'ok'}
+
+        # Enrollment purchase
         tier_key = result.get('tier', 'forge')
 
         # Idempotency: skip if user already has a paid tier
@@ -521,8 +535,16 @@ async def card_editor():
     member_type = app.storage.user.get('member_type', 'free')
     psettings = await db.get_profile_settings(user_id)
 
-    existing_front_cid = user['nfc_image_cid'] if user else None
-    existing_back_cid = user['nfc_back_image_cid'] if user else None
+    # Get or create a draft card
+    draft = await db.get_draft_card(user_id)
+    if not draft:
+        card_id = await db.create_user_card(user_id)
+        draft = await db.get_draft_card(user_id)
+    else:
+        card_id = draft['id']
+
+    existing_front_cid = draft['front_image_cid'] if draft else None
+    existing_back_cid = draft['back_image_cid'] if draft else None
     initial_front_url = f'{config.KUBO_GATEWAY}/ipfs/{existing_front_cid}' if existing_front_cid else ''
     initial_back_url = f'{config.KUBO_GATEWAY}/ipfs/{existing_back_cid}' if existing_back_cid else ''
 
@@ -563,16 +585,16 @@ async def card_editor():
             ui.notify('No image data received', type='warning')
             return
 
-        cid_column = 'nfc_image_cid' if face == 'front' else 'nfc_back_image_cid'
+        cid_field = 'front_image_cid' if face == 'front' else 'back_image_cid'
         filename = 'nfc_card_front.png' if face == 'front' else 'nfc_card_back.png'
 
         try:
             import base64
             content = base64.b64decode(b64_data)
-            user_row = await db.get_user_by_id(user_id)
-            old_cid = user_row[cid_column]
+            current_draft = await db.get_draft_card(user_id)
+            old_cid = current_draft[cid_field] if current_draft else None
             new_cid = await ipfs_client.replace_asset(content, old_cid, filename)
-            await db.update_user(user_id, **{cid_column: new_cid})
+            await db.update_card_images(card_id, **{cid_field: new_cid})
             ipfs_client.schedule_republish(user_id)
             texture_url = f'{config.KUBO_GATEWAY}/ipfs/{new_cid}'
             await ui.run_javascript(f"window.updateCardTexture('{face}', '{texture_url}')")
@@ -587,16 +609,333 @@ async def card_editor():
     upload_trigger = ui.button(on_click=process_upload).props(
         'id=card-upload-trigger').style('position:absolute;left:-9999px;')
 
+    # Checkout trigger (clicked by JS cart button)
+    async def start_checkout():
+        current_draft = await db.get_draft_card(user_id)
+        if not current_draft or not current_draft['front_image_cid'] or not current_draft['back_image_cid']:
+            ui.notify('Upload both front and back images before ordering', type='warning')
+            return
+
+        from payments.pricing import TIERS as _TIERS
+        tier = _TIERS.get(member_type, _TIERS['free'])
+        ordered_count = await db.count_ordered_cards(user_id)
+        cards_included = tier.get('cards_included', 0)
+        card_price_usd = tier.get('card_price_usd', 19.99)
+
+        if ordered_count < cards_included:
+            # Entitled — go straight to shipping
+            _open_shipping_dialog(card_id, 'entitlement', 0)
+        else:
+            # Not entitled — payment required
+            _open_card_payment_dialog(card_id, card_price_usd)
+
+    ui.button(on_click=start_checkout).props(
+        'id=card-checkout-trigger').style('position:absolute;left:-9999px;')
+
     # Three.js scene container + JS module (cache-bust with timestamp)
     _cache_v = int(_time.time())
     ui.add_body_html(f'''
     <div id="card-scene"
          data-front-texture="{initial_front_url}"
-         data-back-texture="{initial_back_url}"></div>
+         data-back-texture="{initial_back_url}"
+         data-card-id="{card_id}"></div>
     <script type="module" src="/static/js/card_scene.js?v={_cache_v}"></script>
     ''')
 
     dashboard_nav(active='card_editor')
+
+
+# ─── Card Payment Dialog ─────────────────────────────────────────────────────
+
+def _open_card_payment_dialog(card_id, card_price_usd):
+    """Payment dialog for card purchases. CARD and XLM tabs."""
+    from payments.pricing import async_fetch_xlm_price, fetch_xlm_price
+    from payments.stellar_pay import create_stellar_payment_request, check_payment
+    from components import form_field
+    import uuid as _uuid
+
+    user_id = app.storage.user.get('user_id')
+    _cached_price = None
+
+    with ui.dialog().props('persistent') as pay_dialog, \
+         ui.card().classes('w-full max-w-lg mx-auto p-6 gap-0').style(
+             'max-height: 90vh; overflow-y: auto;'
+         ) as pay_card:
+
+        with ui.row().classes('w-full items-center justify-between mb-4'):
+            ui.label('ORDER NFC CARD').classes('text-xl font-semibold tracking-wide')
+            ui.button(icon='close', on_click=pay_dialog.close).props('flat round dense')
+
+        ui.label(f'Custom NFC Card — ${card_price_usd:.2f}').classes('text-sm font-bold mb-2')
+
+        with ui.tabs().classes('w-full') as pay_tabs:
+            card_tab = ui.tab('CARD')
+            xlm_tab = ui.tab('XLM')
+        pay_tabs.value = 'CARD'
+
+        with ui.tab_panels(pay_tabs).classes('w-full'):
+            with ui.tab_panel(card_tab):
+                card_price_label = ui.label(
+                    f'PRICE: ${card_price_usd:.2f} USD'
+                ).classes('text-lg font-bold')
+
+            with ui.tab_panel(xlm_tab):
+                xlm_price_label = ui.label(
+                    'PRICE: calculating...'
+                ).classes('text-lg font-bold')
+                ui.label('Pay with XLM at current exchange rate').classes(
+                    'text-sm text-amber-600 font-medium'
+                )
+
+        pay_error = ui.label('').classes('text-red-500 text-sm')
+        pay_error.set_visibility(False)
+
+        async def load_prices():
+            nonlocal _cached_price
+            if _cached_price is not None:
+                return
+            price = await async_fetch_xlm_price()
+            _cached_price = price
+            xlm_amount = round(card_price_usd / price, 2) if price > 0 else 0
+            xlm_price_label.text = f'PRICE: {xlm_amount} XLM (~${card_price_usd:.2f} USD)'
+            update_pay_button()
+
+        def update_pay_button():
+            if pay_tabs.value == 'CARD':
+                pay_btn.text = f'PAY ${card_price_usd:.2f}'
+                pay_btn.enable()
+            elif pay_tabs.value == 'XLM':
+                if _cached_price and _cached_price > 0:
+                    xlm_amt = round(card_price_usd / _cached_price, 2)
+                    pay_btn.text = f'PAY {xlm_amt} XLM'
+                else:
+                    pay_btn.text = 'PAY WITH XLM'
+                pay_btn.enable()
+
+        pay_tabs.on_value_change(lambda: update_pay_button())
+
+        async def handle_pay():
+            pay_error.set_visibility(False)
+
+            if pay_tabs.value == 'XLM':
+                # XLM payment — show QR, on confirm → shipping dialog
+                xlm_price = _cached_price or fetch_xlm_price()
+                xlm_amount = round(card_price_usd / xlm_price, 2) if xlm_price > 0 else 0
+                pay_req = create_stellar_payment_request(
+                    amount_xlm=xlm_amount,
+                )
+                pending = {
+                    'card_id': card_id,
+                    'order_id': pay_req['order_id'],
+                    'memo': pay_req['memo'],
+                    'qr': pay_req['qr'],
+                    'address': pay_req['address'],
+                    'amount': pay_req['amount'],
+                    'amount_usd': card_price_usd,
+                }
+                _show_card_xlm_payment(pay_card, pending, pay_dialog)
+
+            elif pay_tabs.value == 'CARD':
+                # Stripe card payment
+                try:
+                    user = await db.get_user_by_id(user_id)
+                    order_id = f"card-{_uuid.uuid4().hex[:8]}"
+                    # Pre-create card order so webhook can finalize it
+                    await db.create_card_order(
+                        user_id=user_id,
+                        card_id=card_id,
+                        payment_method='stripe',
+                        amount_usd=card_price_usd,
+                        shipping_name='', shipping_street='',
+                        shipping_city='', shipping_state='',
+                        shipping_zip='', shipping_country='',
+                        payment_status='pending',
+                    )
+                    session = create_card_checkout_session(
+                        order_id=order_id,
+                        email=user['email'],
+                        card_id=card_id,
+                        amount_usd=card_price_usd,
+                    )
+                    app.storage.user['pending_card_stripe'] = {
+                        'card_id': card_id,
+                        'order_id': order_id,
+                    }
+                    pay_dialog.close()
+                    await ui.run_javascript(
+                        f"window.location.href='{session.url}'"
+                    )
+                except Exception as e:
+                    pay_error.text = f'Payment setup failed: {e}'
+                    pay_error.set_visibility(True)
+
+        pay_btn = ui.button(
+            f'PAY ${card_price_usd:.2f}',
+            on_click=handle_pay,
+        ).classes('mt-8 px-8 py-3 text-lg w-full')
+
+    pay_dialog.open()
+    ui.timer(0.1, load_prices, once=True)
+
+
+def _show_card_xlm_payment(pay_card, pending, pay_dialog):
+    """XLM payment QR view for card purchases."""
+    from payments.stellar_pay import check_payment
+    from payments.pricing import fetch_xlm_price
+    _timer_ref = None
+
+    def cleanup_and_close():
+        nonlocal _timer_ref
+        if _timer_ref is not None:
+            try:
+                _timer_ref.deactivate()
+            except Exception:
+                pass
+            _timer_ref = None
+        pay_dialog.close()
+
+    pay_card.clear()
+    with pay_card:
+        with ui.row().classes('w-full items-center justify-between mb-4'):
+            ui.label('COMPLETE YOUR PAYMENT').classes('text-xl font-semibold tracking-wide')
+            ui.button(icon='close', on_click=cleanup_and_close).props('flat round dense')
+
+        ui.label(f'Send exactly {pending["amount"]} XLM to:').classes('text-lg')
+
+        with ui.card().classes('w-full items-center p-6 gap-4'):
+            ui.image(pending['qr']).classes('w-64 h-64')
+
+            with ui.row().classes('items-center gap-2 w-full'):
+                ui.label('Address:').classes('font-bold text-sm')
+                ui.label(pending['address']).classes('text-xs font-mono break-all flex-1')
+                ui.button(icon='content_copy', on_click=lambda: ui.run_javascript(
+                    f"navigator.clipboard.writeText('{pending['address']}')"
+                )).props('flat dense size=sm')
+
+            with ui.row().classes('items-center gap-2'):
+                ui.label('Amount:').classes('font-bold text-sm')
+                ui.label(f'{pending["amount"]} XLM').classes('text-sm')
+
+            with ui.row().classes('items-center gap-2 w-full'):
+                ui.label('Memo:').classes('font-bold text-sm')
+                ui.label(pending['memo']).classes('text-xs font-mono flex-1')
+                ui.button(icon='content_copy', on_click=lambda: ui.run_javascript(
+                    f"navigator.clipboard.writeText('{pending['memo']}')"
+                )).props('flat dense size=sm')
+
+            ui.separator()
+            status_label = ui.label('Waiting for payment...').classes('text-sm opacity-70')
+            spinner = ui.spinner('dots', size='lg')
+
+        async def check_and_update():
+            result = check_payment(pending['memo'])
+            if result['paid']:
+                _timer_ref.deactivate()
+                spinner.set_visibility(False)
+                status_label.text = 'Payment confirmed!'
+                pay_dialog.close()
+                _open_shipping_dialog(
+                    pending['card_id'], 'stellar',
+                    pending['amount_usd'], tx_hash=result['hash'],
+                )
+
+        _timer_ref = ui.timer(5.0, check_and_update)
+
+
+# ─── Shipping Dialog ─────────────────────────────────────────────────────────
+
+def _open_shipping_dialog(card_id, payment_method, amount_usd, tx_hash=None):
+    """Collect shipping info and finalize card order."""
+    from components import form_field
+
+    user_id = app.storage.user.get('user_id')
+
+    with ui.dialog().props('persistent') as ship_dialog, \
+         ui.card().classes('w-full max-w-lg mx-auto p-6 gap-2').style(
+             'max-height: 90vh; overflow-y: auto;'
+         ):
+
+        with ui.row().classes('w-full items-center justify-between mb-2'):
+            ui.label('SHIPPING ADDRESS').classes('text-xl font-semibold tracking-wide')
+            ui.button(icon='close', on_click=ship_dialog.close).props('flat round dense')
+
+        ui.label('Where should we send your card?').classes('text-sm opacity-70 mb-2')
+
+        name_field = form_field('NAME', 'Full name', dense=True)
+        street_field = form_field('STREET', 'Street address', dense=True)
+        city_field = form_field('CITY', 'City', dense=True)
+        state_field = form_field('STATE / PROVINCE', 'State or province', dense=True)
+        zip_field = form_field('ZIP / POSTAL CODE', 'Postal code', dense=True)
+        country_field = form_field('COUNTRY', 'Country', dense=True)
+
+        ship_error = ui.label('').classes('text-red-500 text-sm')
+        ship_error.set_visibility(False)
+
+        async def handle_submit():
+            ship_error.set_visibility(False)
+            if not all([name_field.value, street_field.value, city_field.value,
+                        zip_field.value, country_field.value]):
+                ship_error.text = 'Please fill in all required fields.'
+                ship_error.set_visibility(True)
+                return
+
+            try:
+                order_id = await db.create_card_order(
+                    user_id=user_id,
+                    card_id=card_id,
+                    payment_method=payment_method,
+                    amount_usd=amount_usd,
+                    shipping_name=name_field.value.strip(),
+                    shipping_street=street_field.value.strip(),
+                    shipping_city=city_field.value.strip(),
+                    shipping_state=state_field.value.strip(),
+                    shipping_zip=zip_field.value.strip(),
+                    shipping_country=country_field.value.strip(),
+                    tx_hash=tx_hash,
+                    payment_status='paid' if payment_method == 'entitlement' else 'paid',
+                )
+                await db.finalize_card_order(order_id, tx_hash=tx_hash)
+                ship_dialog.close()
+                ui.notify('Card ordered! We\'ll ship it soon.', type='positive')
+                ui.navigate.to('/profile/edit')
+            except Exception as e:
+                ship_error.text = f'Order failed: {e}'
+                ship_error.set_visibility(True)
+
+        ui.button('PLACE ORDER', on_click=handle_submit).classes(
+            'mt-4 px-8 py-3 text-lg w-full'
+        )
+
+    ship_dialog.open()
+
+
+# ─── Card Order Success (Stripe redirect) ────────────────────────────────────
+
+@ui.page('/card/order/success')
+async def card_order_success(session_id: str = ''):
+    """Stripe redirects here after card purchase. Collects shipping then finalizes."""
+    if not require_auth():
+        return
+
+    user_id = app.storage.user.get('user_id')
+    pending = app.storage.user.get('pending_card_stripe', {})
+    card_id = pending.get('card_id')
+
+    if not card_id:
+        style_page('Card Order')
+        with ui.column().classes('w-full items-center gap-8 mt-12'):
+            ui.label('Session expired.').classes('text-2xl font-semibold')
+            ui.button('BACK TO EDITOR', on_click=lambda: ui.navigate.to('/card/editor'))
+        return
+
+    style_page('Card Order — Shipping')
+
+    # Clean up pending state
+    if 'pending_card_stripe' in app.storage.user:
+        del app.storage.user['pending_card_stripe']
+
+    # Open shipping dialog for the purchased card
+    _open_shipping_dialog(card_id, 'stripe', 0, tx_hash=session_id)
 
 
 # ─── Card Wallet (3D) ────────────────────────────────────────────────────────
@@ -611,21 +950,43 @@ async def card_case():
     moniker = user['moniker'] if user else app.storage.user.get('moniker', 'Unknown')
     member_type = app.storage.user.get('member_type', 'free')
     psettings = await db.get_profile_settings(user_id)
+    moniker_slug = moniker.lower().replace(' ', '-')
 
-    # Load peer cards from DB
+    # Own finalized cards
+    own_cards = await db.get_user_cards(user_id, exclude_draft=True)
+    own_data = []
+    for c in own_cards:
+        cd = dict(c)
+        own_data.append({
+            'type': 'own',
+            'card_id': cd['id'],
+            'moniker': moniker,
+            'front_url': (f'{config.KUBO_GATEWAY}/ipfs/{cd["front_image_cid"]}'
+                          if cd.get('front_image_cid') else ''),
+            'back_url': (f'{config.KUBO_GATEWAY}/ipfs/{cd["back_image_cid"]}'
+                         if cd.get('back_image_cid') else ''),
+            'is_active': bool(cd['is_active']),
+            'status': cd['status'],
+            'linktree_url': f'/profile/{moniker_slug}',
+        })
+
+    # Peer cards (peer's active card via updated query)
     peers = await db.get_peer_cards(user_id)
     peer_data = []
     for p in peers:
         pd = dict(p)
-        moniker_slug = pd['moniker'].lower().replace(' ', '-')
+        peer_slug = pd['moniker'].lower().replace(' ', '-')
         peer_data.append({
+            'type': 'peer',
             'moniker': pd['moniker'],
             'front_url': (f'{config.KUBO_GATEWAY}/ipfs/{pd["nfc_image_cid"]}'
                           if pd.get('nfc_image_cid') else ''),
             'back_url': (f'{config.KUBO_GATEWAY}/ipfs/{pd["nfc_back_image_cid"]}'
                          if pd.get('nfc_back_image_cid') else ''),
-            'linktree_url': f'/profile/{moniker_slug}',
+            'linktree_url': f'/profile/{peer_slug}',
         })
+
+    all_cards = own_data + peer_data
 
     header = dashboard_header(moniker, member_type, user_id=user_id,
                               override_enabled=bool(psettings['linktree_override']),
@@ -667,12 +1028,17 @@ async def card_case():
         await db.add_peer_card(user_id, peer['id'])
         peer_moniker = peer['moniker']
         peer_moniker_slug = peer_moniker.lower().replace(' ', '-')
+        # Get peer's active card images
+        peer_active = await db.get_active_card(peer['id'])
+        front_cid = peer_active['front_image_cid'] if peer_active else peer.get('nfc_image_cid')
+        back_cid = peer_active['back_image_cid'] if peer_active else peer.get('nfc_back_image_cid')
         new_peer_data = {
+            'type': 'peer',
             'moniker': peer_moniker,
-            'front_url': (f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_image_cid"]}'
-                          if peer.get('nfc_image_cid') else ''),
-            'back_url': (f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_back_image_cid"]}'
-                          if peer.get('nfc_back_image_cid') else ''),
+            'front_url': (f'{config.KUBO_GATEWAY}/ipfs/{front_cid}'
+                          if front_cid else ''),
+            'back_url': (f'{config.KUBO_GATEWAY}/ipfs/{back_cid}'
+                          if back_cid else ''),
             'linktree_url': f'/profile/{peer_moniker_slug}',
         }
         ui.notify(f'Added {peer_moniker} to your card wallet!', type='positive')
@@ -708,12 +1074,16 @@ async def card_case():
                 await db.add_peer_card(user_id, peer['id'])
                 peer_moniker = peer['moniker']
                 peer_moniker_slug = peer_moniker.lower().replace(' ', '-')
+                peer_active = await db.get_active_card(peer['id'])
+                front_cid = peer_active['front_image_cid'] if peer_active else peer.get('nfc_image_cid')
+                back_cid = peer_active['back_image_cid'] if peer_active else peer.get('nfc_back_image_cid')
                 new_peer_data = {
+                    'type': 'peer',
                     'moniker': peer_moniker,
-                    'front_url': (f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_image_cid"]}'
-                                  if peer.get('nfc_image_cid') else ''),
-                    'back_url': (f'{config.KUBO_GATEWAY}/ipfs/{peer["nfc_back_image_cid"]}'
-                                  if peer.get('nfc_back_image_cid') else ''),
+                    'front_url': (f'{config.KUBO_GATEWAY}/ipfs/{front_cid}'
+                                  if front_cid else ''),
+                    'back_url': (f'{config.KUBO_GATEWAY}/ipfs/{back_cid}'
+                                  if back_cid else ''),
                     'linktree_url': f'/profile/{peer_moniker_slug}',
                 }
                 ui.notify(f'Added {peer_moniker} to your wallet!', type='positive')
@@ -731,12 +1101,25 @@ async def card_case():
     ui.button(on_click=open_manual_add_dialog).props(
         'id=manual-add-trigger').style('position:absolute;left:-9999px;')
 
-    # Pass peer data as JSON + load wallet scene
+    # Hidden trigger for set-active (own card hold action)
+    async def handle_set_active():
+        try:
+            cid = await ui.run_javascript('return window.__setActiveCardId', timeout=5.0)
+        except Exception:
+            return
+        if cid:
+            await db.set_active_card(user_id, cid)
+            ui.notify('Active card updated', type='positive')
+
+    ui.button(on_click=handle_set_active).props(
+        'id=set-active-trigger').style('position:absolute;left:-9999px;')
+
+    # Pass card data as JSON + load wallet scene
     _cache_v = int(_time.time())
-    peers_json = json.dumps(peer_data)
+    cards_json = json.dumps(all_cards)
     ui.add_body_html(f'''
     <div id="card-scene"></div>
-    <script id="peer-data" type="application/json">{peers_json}</script>
+    <script id="card-data" type="application/json">{cards_json}</script>
     <script type="module" src="/static/js/card_wallet.js?v={_cache_v}"></script>
     ''')
 

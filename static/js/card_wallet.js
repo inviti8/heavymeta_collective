@@ -5,8 +5,8 @@ import * as THREE from 'https://esm.sh/three@0.170.0';
 const container = document.getElementById('card-scene');
 if (!container) console.error('[card_wallet] #card-scene not found');
 
-const peerDataEl = document.getElementById('peer-data');
-const peers = peerDataEl ? JSON.parse(peerDataEl.textContent) : [];
+const cardDataEl = document.getElementById('card-data');
+const peers = cardDataEl ? JSON.parse(cardDataEl.textContent) : [];
 
 // ─── Renderer ──────────────────────────────────────────────────────────────
 
@@ -51,9 +51,9 @@ function loadTexture(material, url) {
   });
 }
 
-function createCard(peer) {
+function createCard(entry) {
   const group = new THREE.Group();
-  group.userData = { peer };
+  group.userData = { peer: entry };
 
   // Front plane
   const frontMat = new THREE.MeshStandardMaterial({
@@ -75,8 +75,8 @@ function createCard(peer) {
   group.add(back);
 
   // Load textures
-  if (peer.front_url) loadTexture(frontMat, peer.front_url);
-  if (peer.back_url) loadTexture(backMat, peer.back_url);
+  if (entry.front_url) loadTexture(frontMat, entry.front_url);
+  if (entry.back_url) loadTexture(backMat, entry.back_url);
 
   scene.add(group);
   return group;
@@ -317,8 +317,17 @@ function startHold() {
   cancelHold();
   holdTimer = setTimeout(() => {
     if (selectedCard) {
-      const url = selectedCard.userData.peer.linktree_url;
-      if (url) window.open(url, '_blank');
+      const entry = selectedCard.userData.peer;
+      if (entry.type === 'own' && entry.card_id) {
+        // Own card: set as active card
+        window.__setActiveCardId = entry.card_id;
+        const trigger = document.getElementById('set-active-trigger');
+        if (trigger) trigger.click();
+      } else {
+        // Peer card: open linktree
+        const url = entry.linktree_url;
+        if (url) window.open(url, '_blank');
+      }
     }
     holdTimer = null;
   }, HOLD_MS);

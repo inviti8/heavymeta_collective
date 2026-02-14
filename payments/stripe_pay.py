@@ -39,6 +39,36 @@ def create_checkout_session(order_id, email, moniker, password_hash,
     return session
 
 
+def create_card_checkout_session(order_id, email, card_id, amount_usd,
+                                 base_url='http://localhost:8080'):
+    price_cents = int(amount_usd * 100)
+
+    session = stripe.checkout.Session.create(
+        payment_method_types=['card'],
+        line_items=[{
+            'price_data': {
+                'currency': 'usd',
+                'unit_amount': price_cents,
+                'product_data': {
+                    'name': 'Heavymeta Collective — Custom NFC Card',
+                    'description': 'Custom-designed NFC card with your artwork',
+                },
+            },
+            'quantity': 1,
+        }],
+        mode='payment',
+        success_url=f'{base_url}/card/order/success?session_id={{CHECKOUT_SESSION_ID}}',
+        cancel_url=f'{base_url}/card/editor',
+        customer_email=email,
+        metadata={
+            'order_id': order_id,
+            'card_id': card_id,
+            'purchase_type': 'card',
+        },
+    )
+    return session
+
+
 def retrieve_checkout_session(session_id):
     """Retrieve a completed Stripe checkout session and extract enrollment data."""
     cs = stripe.checkout.Session.retrieve(session_id)
@@ -61,8 +91,20 @@ def handle_webhook(payload, sig_header):
 
     if event['type'] == 'checkout.session.completed':
         session = event['data']['object']
+        purchase_type = session['metadata'].get('purchase_type', 'enrollment')
+
+        if purchase_type == 'card':
+            return {
+                'completed': True,
+                'purchase_type': 'card',
+                'order_id': session['metadata']['order_id'],
+                'card_id': session['metadata']['card_id'],
+                'payment_intent': session.get('payment_intent', ''),
+            }
+
         return {
             'completed': True,
+            'purchase_type': 'enrollment',
             'email': session['metadata']['email'],
             'moniker': session['metadata']['moniker'],
             'password_hash': session['metadata']['password_hash'],

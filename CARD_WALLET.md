@@ -642,6 +642,617 @@ ui.button(on_click=open_manual_add_dialog).props(
 
 ---
 
+## Phase 3: Multi-Card Support & Card Checkout
+
+### Overview
+
+Members can design and order multiple physical NFC cards. The card editor becomes a design → checkout flow: customize both faces, then finalize via a shopping-cart button. Tier entitlements grant the first card(s) free; additional cards go through a payment dialog (variant of the join-flow dialog). After payment (or entitlement skip), a shipping address form collects delivery details.
+
+### Design Principles
+
+- **Every card goes through checkout** — even entitled (free) cards need shipping info
+- **Entitlements skip payment, not checkout** — the cart button always opens the checkout flow; payment is conditionally skipped
+- **Card images are draft until ordered** — the editor writes to a draft `user_cards` row; only finalized cards appear in the card wallet and are shared with peers
+- **The user's "active card"** is their most recently ordered card (used for peer_cards display)
+
+---
+
+### Schema Changes
+
+#### `tiers.json` — Add `cards_included` and `card_price_usd`
+
+Each tier gains a `cards_included` field (number of NFC cards included with membership) and a flat `card_price_usd` for additional cards:
+
+```json
+[
+  {
+    "index": 0, "key": "free", "label": "FREE",
+    "badge": "FREE MEMBER",
+    "description": "Linktree only",
+    "join_usd": 0, "annual_usd": 0,
+    "cards_included": 0, "card_price_usd": 19.99,
+    "image": "/static/tier0.png"
+  },
+  {
+    "index": 1, "key": "spark", "label": "SPARK",
+    "badge": "SPARK MEMBER",
+    "description": "QR cards, basic access",
+    "join_usd": 29.99, "annual_usd": 49.99,
+    "cards_included": 1, "card_price_usd": 14.99,
+    "image": "/static/tier1.png"
+  },
+  {
+    "index": 3, "key": "forge", "label": "FORGE",
+    "badge": "FORGE MEMBER",
+    "description": "NFC cards, Pintheon node, full access",
+    "join_usd": 59.99, "annual_usd": 99.99,
+    "cards_included": 1, "card_price_usd": 14.99,
+    "image": "/static/tier3.png"
+  },
+  {
+    "index": 4, "key": "founding_forge", "label": "FOUNDING FORGE",
+    "badge": "FOUNDING FORGE",
+    "description": "Limited to 100 — governance vote, unlimited invites",
+    "join_usd": 79.99, "annual_usd": 49.99,
+    "cards_included": 2, "card_price_usd": 9.99,
+    "image": "/static/tier4.png"
+  },
+  {
+    "index": 5, "key": "anvil", "label": "ANVIL",
+    "badge": "ANVIL MEMBER",
+    "description": "Advisory board access",
+    "join_usd": 149.99, "annual_usd": 249.99,
+    "cards_included": 3, "card_price_usd": 9.99,
+    "image": "/static/tier5.png"
+  }
+]
+```
+
+#### New DB Table: `user_cards`
+
+Replaces the single `nfc_image_cid` / `nfc_back_image_cid` columns on `users`. Each row is one card design.
+
+```sql
+CREATE TABLE IF NOT EXISTS user_cards (
+    id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL REFERENCES users(id),
+    front_image_cid TEXT,
+    back_image_cid  TEXT,
+    status          TEXT DEFAULT 'draft',   -- draft | ordered | shipped | delivered
+    is_active       INTEGER DEFAULT 0,      -- 1 = this card is shown to peers
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+- `draft` — being edited, not yet ordered
+- `ordered` — checkout complete, awaiting fulfillment
+- `shipped` / `delivered` — future statuses for tracking
+- `is_active` — exactly one card per user is active (shown in card wallet / peer exchanges). Set when order completes.
+
+#### New DB Table: `card_orders`
+
+Tracks payment + shipping for each card checkout.
+
+```sql
+CREATE TABLE IF NOT EXISTS card_orders (
+    id               TEXT PRIMARY KEY,
+    user_id          TEXT NOT NULL REFERENCES users(id),
+    card_id          TEXT NOT NULL REFERENCES user_cards(id),
+    payment_method   TEXT,           -- 'entitlement' | 'card' | 'xlm'
+    payment_status   TEXT DEFAULT 'pending',  -- pending | paid | failed
+    tx_hash          TEXT,
+    amount_usd       REAL,
+    shipping_name    TEXT,
+    shipping_street  TEXT,
+    shipping_city    TEXT,
+    shipping_state   TEXT,
+    shipping_zip     TEXT,
+    shipping_country TEXT,
+    order_status     TEXT DEFAULT 'pending',  -- pending | processing | shipped | delivered
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### Migration: Existing User Cards
+
+Migrate existing `nfc_image_cid` / `nfc_back_image_cid` from the `users` table into `user_cards` rows:
+
+```python
+# In db.init_db() migrations
+"""
+INSERT INTO user_cards (id, user_id, front_image_cid, back_image_cid, status, is_active)
+SELECT hex(randomblob(16)), id, nfc_image_cid, nfc_back_image_cid, 'ordered', 1
+FROM users
+WHERE nfc_image_cid IS NOT NULL
+AND NOT EXISTS (SELECT 1 FROM user_cards WHERE user_id = users.id)
+"""
+```
+
+The legacy columns remain on `users` for backward compat but are no longer written to by the card editor.
+
+#### DB Functions (db.py)
+
+```python
+async def create_user_card(user_id) -> str
+    """Create a new draft card. Returns card_id."""
+
+async def get_draft_card(user_id) -> Row | None
+    """Get the user's current draft card (status='draft'), or None."""
+
+async def get_user_cards(user_id, status=None) -> list[Row]
+    """All cards for a user, optionally filtered by status."""
+
+async def get_active_card(user_id) -> Row | None
+    """The card with is_active=1."""
+
+async def update_card_images(card_id, front_cid=None, back_cid=None)
+    """Update front/back CIDs on a card."""
+
+async def set_active_card(user_id, card_id)
+    """Set is_active=1 on card_id, 0 on all others for this user."""
+
+async def count_ordered_cards(user_id) -> int
+    """Count cards with status != 'draft' for entitlement math."""
+
+async def create_card_order(card_id, user_id, payment_method, amount_usd,
+                            shipping_name, shipping_street, shipping_city,
+                            shipping_state, shipping_zip, shipping_country) -> str
+    """Create a card_order row. Returns order_id."""
+
+async def finalize_card_order(order_id, tx_hash=None)
+    """Set payment_status='paid', card status='ordered', card is_active=1."""
+```
+
+---
+
+### Card Editor Changes (`main.py` — `/card/editor`)
+
+#### Draft Card Loading
+
+On page load, find or create a draft card:
+
+```python
+draft = await db.get_draft_card(user_id)
+if not draft:
+    card_id = await db.create_user_card(user_id)
+    draft = await db.get_user_card(card_id)
+else:
+    card_id = draft['id']
+
+existing_front_cid = draft['front_image_cid']
+existing_back_cid = draft['back_image_cid']
+```
+
+#### Image Upload Target
+
+`process_upload()` writes to `user_cards` instead of `users`:
+
+```python
+# Before: await db.update_user(user_id, **{cid_column: new_cid})
+# After:
+if face == 'front':
+    await db.update_card_images(card_id, front_cid=new_cid)
+else:
+    await db.update_card_images(card_id, back_cid=new_cid)
+```
+
+#### Shopping Cart Button
+
+A floating cart button in the top-right corner of the 3D viewport (same z-index layer as the scan/add buttons in card_wallet.js):
+
+```javascript
+// In card_scene.js
+const cartBtn = document.createElement('button');
+cartBtn.innerHTML = '<span class="material-icons" style="font-size:28px;">shopping_cart</span>';
+cartBtn.style.cssText = `
+  position: fixed; top: 16px; right: 16px; z-index: 6000;
+  width: 52px; height: 52px; border-radius: 50%;
+  background: rgba(140, 82, 255, 0.85); border: none; cursor: pointer;
+  color: white; display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px); box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+`;
+document.body.appendChild(cartBtn);
+
+cartBtn.addEventListener('click', () => {
+    document.getElementById('card-checkout-trigger').click();
+});
+```
+
+Python-side hidden trigger in `/card/editor`:
+
+```python
+async def start_checkout():
+    # 1. Check both sides have images
+    draft = await db.get_draft_card(user_id)
+    if not draft or not draft['front_image_cid'] or not draft['back_image_cid']:
+        ui.notify('Please add images to both sides of the card.', type='warning')
+        return
+
+    # 2. Check entitlement
+    tier_data = TIERS.get(member_type, TIERS['free'])
+    cards_included = tier_data.get('cards_included', 0)
+    cards_ordered = await db.count_ordered_cards(user_id)
+    entitled = cards_ordered < cards_included
+
+    if entitled:
+        # Skip payment → go straight to shipping
+        _open_shipping_dialog(draft['id'], payment_method='entitlement', amount_usd=0)
+    else:
+        # Open payment dialog
+        card_price = tier_data.get('card_price_usd', 19.99)
+        _open_card_payment_dialog(draft['id'], card_price)
+
+ui.button(on_click=start_checkout).props(
+    'id=card-checkout-trigger').style('position:absolute;left:-9999px;')
+```
+
+---
+
+### Card Payment Dialog
+
+A variant of the join-flow payment dialog (`auth_dialog.py:_open_payment_dialog`), but for card purchases instead of membership enrollment.
+
+```python
+def _open_card_payment_dialog(card_id, card_price_usd):
+    """Payment dialog for purchasing additional NFC cards."""
+
+    with ui.dialog().props('persistent') as pay_dialog, \
+         ui.card().classes('w-full max-w-lg mx-auto p-6 gap-0').style(
+             'max-height: 90vh; overflow-y: auto;'
+         ):
+
+        with ui.row().classes('w-full items-center justify-between mb-4'):
+            ui.label('CARD CHECKOUT').classes('text-xl font-semibold tracking-wide')
+            ui.button(icon='close', on_click=pay_dialog.close).props('flat round dense')
+
+        ui.label('Custom NFC Card').classes('text-sm font-bold')
+        ui.label(f'${card_price_usd:.2f} USD').classes('text-lg font-bold mb-2')
+
+        with ui.tabs().classes('w-full') as pay_tabs:
+            card_tab = ui.tab('CARD')
+            xlm_tab = ui.tab('XLM')
+        pay_tabs.value = 'CARD'
+
+        # ... same CARD / XLM tab panels as join payment dialog ...
+        # ... same price loading, XLM conversion, pay button logic ...
+
+        async def handle_pay():
+            if pay_tabs.value == 'CARD':
+                # Stripe checkout for card purchase
+                session = create_checkout_session(
+                    order_id=f"card-{uuid.uuid4().hex[:8]}",
+                    email=user_email,
+                    moniker=moniker,
+                    password_hash='',      # not enrollment
+                    tier_key=member_type,
+                    card_id=card_id,        # new: attach card_id to session metadata
+                    amount_usd=card_price_usd,
+                )
+                # ... redirect to Stripe ...
+            elif pay_tabs.value == 'XLM':
+                # Stellar payment for card purchase
+                # ... same QR flow, but on confirmation → open shipping dialog ...
+                pass
+
+    pay_dialog.open()
+```
+
+Key differences from the join payment dialog:
+- Title says "CARD CHECKOUT" instead of "PAYMENT"
+- No enrollment — no user creation on success
+- On payment success → opens shipping dialog (instead of redirecting to dashboard)
+- No OPUS tab (cards are physical goods, not membership)
+
+---
+
+### Shipping Address Dialog
+
+Opened after payment confirmation (or immediately for entitled cards):
+
+```python
+def _open_shipping_dialog(card_id, payment_method, amount_usd, tx_hash=None):
+    """Collect shipping address and finalize the card order."""
+
+    with ui.dialog().props('persistent') as ship_dialog, \
+         ui.card().classes('w-full max-w-lg mx-auto p-6 gap-4'):
+
+        with ui.row().classes('w-full items-center justify-between mb-2'):
+            ui.label('SHIPPING ADDRESS').classes('text-xl font-semibold tracking-wide')
+            ui.button(icon='close', on_click=ship_dialog.close).props('flat round dense')
+
+        name_field = form_field('FULL NAME', 'First and Last Name', dense=True)
+        street_field = form_field('STREET ADDRESS', '123 Main St, Apt 4', dense=True)
+        city_field = form_field('CITY', 'City', dense=True)
+
+        with ui.row().classes('w-full gap-2'):
+            with ui.column().classes('flex-1 gap-0'):
+                state_field = form_field('STATE / PROVINCE', 'CA', dense=True)
+            with ui.column().classes('flex-1 gap-0'):
+                zip_field = form_field('ZIP / POSTAL CODE', '90210', dense=True)
+
+        country_field = form_field('COUNTRY', 'United States', dense=True)
+
+        ship_error = ui.label('').classes('text-red-500 text-sm')
+        ship_error.set_visibility(False)
+
+        async def submit_order():
+            # Validate required fields
+            if not all([name_field.value, street_field.value,
+                        city_field.value, zip_field.value, country_field.value]):
+                ship_error.text = 'Please fill in all required fields.'
+                ship_error.set_visibility(True)
+                return
+
+            order_id = await db.create_card_order(
+                card_id=card_id,
+                user_id=user_id,
+                payment_method=payment_method,
+                amount_usd=amount_usd,
+                shipping_name=name_field.value.strip(),
+                shipping_street=street_field.value.strip(),
+                shipping_city=city_field.value.strip(),
+                shipping_state=state_field.value.strip(),
+                shipping_zip=zip_field.value.strip(),
+                shipping_country=country_field.value.strip(),
+            )
+            await db.finalize_card_order(order_id, tx_hash=tx_hash)
+            ship_dialog.close()
+            ui.notify('Card ordered! You will be notified when it ships.', type='positive')
+            ui.navigate.to('/profile/edit')
+
+        ui.button('PLACE ORDER', on_click=submit_order).classes(
+            'mt-4 px-8 py-3 text-lg w-full'
+        )
+
+    ship_dialog.open()
+```
+
+---
+
+### Checkout Flow Summary
+
+```
+                    ┌─────────────────┐
+                    │  Card Editor    │
+                    │  (both images   │
+                    │   applied)      │
+                    └────────┬────────┘
+                             │
+                        [🛒 Cart]
+                             │
+                    ┌────────▼────────┐
+                    │ Both sides set? │
+                    └────┬───────┬────┘
+                         │ NO    │ YES
+                    (toast)      │
+                         │ ┌────▼──────────┐
+                         │ │ Entitlement?  │
+                         │ │ (cards_ordered │
+                         │ │ < cards_incl.) │
+                         │ └──┬─────────┬──┘
+                         │  YES         NO
+                         │    │    ┌────▼────────┐
+                         │    │    │  Payment    │
+                         │    │    │  Dialog     │
+                         │    │    │  (Card/XLM) │
+                         │    │    └────┬────────┘
+                         │    │         │ paid
+                         │    │    ┌────▼────────┐
+                         │    └───►│  Shipping   │
+                         │         │  Dialog     │
+                         │         └────┬────────┘
+                         │              │ submitted
+                         │         ┌────▼────────┐
+                         │         │  Order      │
+                         │         │  Created    │
+                         │         │  Card set   │
+                         │         │  as active  │
+                         │         └─────────────┘
+```
+
+---
+
+### Unified Card Wallet (`/card/case`)
+
+The card wallet merges two collections into a single carousel:
+
+1. **Own cards** — the user's finalized cards from `user_cards` (status != `'draft'`)
+2. **Peer cards** — cards collected from other members (each peer's active card)
+
+Own cards appear first (newest at top), followed by peer cards. A visual separator or badge distinguishes them (e.g. own cards have a subtle gold border; peer cards show the peer's moniker).
+
+#### Data Assembly (`main.py` — `/card/case`)
+
+```python
+# 1. Own finalized cards
+own_cards = await db.get_user_cards(user_id, exclude_draft=True)
+own_data = []
+for c in own_cards:
+    c = dict(c)
+    own_data.append({
+        'type': 'own',
+        'card_id': c['id'],
+        'moniker': moniker,              # owner's own moniker
+        'front_url': f'{config.KUBO_GATEWAY}/ipfs/{c["front_image_cid"]}' if c.get('front_image_cid') else '',
+        'back_url': f'{config.KUBO_GATEWAY}/ipfs/{c["back_image_cid"]}' if c.get('back_image_cid') else '',
+        'is_active': bool(c.get('is_active')),
+        'status': c['status'],           # ordered | shipped | delivered
+        'linktree_url': f'/profile/{moniker_slug}',
+    })
+
+# 2. Peer cards (each peer's active card)
+peers = await db.get_peer_cards(user_id)
+peer_data = []
+for p in peers:
+    pd = dict(p)
+    peer_slug = pd['moniker'].lower().replace(' ', '-')
+    peer_data.append({
+        'type': 'peer',
+        'moniker': pd['moniker'],
+        'front_url': (f'{config.KUBO_GATEWAY}/ipfs/{pd["front_image_cid"]}'
+                      if pd.get('front_image_cid') else ''),
+        'back_url': (f'{config.KUBO_GATEWAY}/ipfs/{pd["back_image_cid"]}'
+                      if pd.get('back_image_cid') else ''),
+        'is_active': False,               # not applicable for peers
+        'status': None,
+        'linktree_url': f'/profile/{peer_slug}',
+    })
+
+# Merge: own cards first, then peers
+all_cards = own_data + peer_data
+```
+
+#### Updated `get_peer_cards()` Query
+
+Joins through `user_cards` instead of reading CIDs from the `users` row:
+
+```sql
+SELECT u.moniker, uc.front_image_cid, uc.back_image_cid,
+       u.ipns_name, u.member_type
+FROM peer_cards pc
+JOIN users u ON pc.peer_id = u.id
+LEFT JOIN user_cards uc ON uc.user_id = u.id AND uc.is_active = 1
+WHERE pc.owner_id = ?
+ORDER BY pc.collected_at DESC
+```
+
+#### New `get_user_cards()` for Own Cards
+
+```sql
+SELECT id, front_image_cid, back_image_cid, status, is_active, created_at
+FROM user_cards
+WHERE user_id = ? AND status != 'draft'
+ORDER BY created_at DESC
+```
+
+#### JS Data Shape
+
+The card wallet JS receives a single `all_cards` array. Each entry has a `type` field (`'own'` or `'peer'`) so the scene can render them differently:
+
+```javascript
+const allCards = JSON.parse(
+    document.getElementById('card-data').textContent
+);
+
+allCards.forEach(entry => {
+    const card = createCard(entry);
+    if (entry.type === 'own') {
+        // Gold border ring or "YOUR CARD" label overlay
+        addOwnCardBadge(card, entry.is_active, entry.status);
+    }
+    cards.push(card);
+});
+```
+
+**Own card visual indicators:**
+- Active card: gold border + small star icon
+- Ordered (not yet shipped): "ORDERED" status chip
+- Shipped: "SHIPPED" status chip
+- Delivered: no chip (just the gold border)
+
+**Peer card indicators:**
+- Peer moniker label below the card (same as current behavior)
+
+#### Interactions by Card Type
+
+| Action | Own Card | Peer Card |
+|--------|----------|-----------|
+| Click center → select | Select + rotate (same) | Select + rotate (same) |
+| Hold selected → action | Set as active card (if not already) | Open peer's linktree |
+| Long-press info | Show order status | Show peer moniker |
+
+---
+
+### Files Modified / Created
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `static/tiers.json` | Add `cards_included`, `card_price_usd` per tier |
+| 2 | `db.py` | Add `user_cards` + `card_orders` tables to SCHEMA; migration for existing cards; new DB functions (`get_user_cards`, `get_draft_card`, `count_ordered_cards`, `create_card_order`, `finalize_card_order`, `set_active_card`) |
+| 3 | `main.py` `/card/editor` | Load/create draft card; upload writes to `user_cards`; add checkout trigger |
+| 4 | `static/js/card_scene.js` | Add floating cart button (top-right) |
+| 5 | `main.py` (new functions) | `_open_card_payment_dialog()`, `_open_shipping_dialog()` |
+| 6 | `main.py` `/card/case` | Merge own finalized cards + peer cards into single `all_cards` list; pass unified JSON to JS |
+| 7 | `db.py` `get_peer_cards()` | Join through `user_cards` for peer's active card CIDs |
+| 8 | `static/js/card_wallet.js` | Handle `type` field (`own` / `peer`); render own-card badges (gold border, status chips); differentiate hold action by type |
+| 9 | `payments/stripe_pay.py` | Handle `card_id` in checkout session metadata (for card purchases vs. enrollment) |
+
+---
+
+### Implementation Steps
+
+#### Step 1: Schema + Migrations
+- Add `cards_included` and `card_price_usd` to `tiers.json`
+- Add `user_cards` and `card_orders` tables to `db.py` SCHEMA
+- Add migration to copy existing `nfc_image_cid` / `nfc_back_image_cid` into `user_cards`
+- Add all new DB functions
+
+#### Step 2: Card Editor — Draft Cards
+- `/card/editor` creates/loads a draft `user_cards` row
+- `process_upload()` writes to `user_cards.front_image_cid` / `back_image_cid`
+- Pass `card_id` to the JS scene via data attribute
+
+#### Step 3: Cart Button + Checkout Trigger
+- Add cart button to `card_scene.js` (top-right floating button)
+- Add `card-checkout-trigger` hidden button in `/card/editor`
+- Implement `start_checkout()`: validate both images → check entitlement → route to payment or shipping
+
+#### Step 4: Card Payment Dialog
+- Create `_open_card_payment_dialog()` — variant of `_open_payment_dialog()` for card purchases
+- Wire up Stripe + XLM payment flows with `card_id` metadata
+- On payment success → open shipping dialog
+
+#### Step 5: Shipping Address Dialog
+- Create `_open_shipping_dialog()` with address form fields
+- On submit → `create_card_order()` + `finalize_card_order()`
+- Set card as active, navigate to dashboard
+
+#### Step 6: Unified Card Wallet
+- Update `get_peer_cards()` to join through `user_cards.is_active = 1`
+- Add `get_user_cards(user_id, exclude_draft=True)` for own finalized cards
+- `/card/case` merges own cards + peer cards into single `all_cards` array
+- Each entry carries `type` (`'own'` or `'peer'`), `is_active`, `status`
+- `card_wallet.js` reads `type` to render own-card badges (gold border, status chips) vs. peer moniker labels
+- Hold action: own card → set as active; peer card → open linktree
+
+---
+
+### TODO: Card Order Fulfillment
+
+> **This section is deferred to a follow-up task.**
+
+After card orders are created in the database, the following fulfillment pipeline needs to be built:
+
+- [ ] Admin dashboard to view/manage card orders (`/admin/orders`)
+- [ ] Order status progression: `pending` → `processing` → `shipped` → `delivered`
+- [ ] Integration with print-on-demand / NFC card vendor API
+- [ ] Shipping label generation + tracking number storage
+- [ ] Email notifications at each status change (Mailtrap)
+- [ ] Card image export: render front/back CIDs as print-ready PNGs (856×540 @ 300 DPI)
+- [ ] Bulk order batching (aggregate orders for vendor submission)
+- [ ] Reorder flow: clone an existing card design into a new draft
+- [ ] Order history view in member settings
+
+---
+
+### Verification
+
+1. `uv run python -c "from payments.pricing import TIERS; print(TIERS['forge']['cards_included'])"` — JSON loads with new fields
+2. `uv run pytest tests/test_pricing.py` — existing pricing tests pass
+3. Navigate to `/card/editor` → cart button visible top-right
+4. Upload front + back images → click cart → entitlement check runs
+5. Entitled user → shipping dialog opens directly
+6. Non-entitled user → payment dialog opens → after payment → shipping dialog
+7. Submit shipping → order created, card set as active, redirect to dashboard
+8. Navigate to `/card/case` → own finalized cards appear first with gold border
+9. Active card shows star icon; ordered cards show "ORDERED" chip
+10. Peer cards appear after own cards with peer moniker labels
+11. Hold own card → sets it as active; hold peer card → opens linktree
+12. Create a second card → cart shows payment dialog (entitlement used up)
+13. New card appears in card wallet after checkout, merged with existing cards + peers
+
+---
+
 ## Future Enhancements
 
 - NFC tap to collect real peer cards
@@ -651,3 +1262,4 @@ ui.button(on_click=open_manual_add_dialog).props(
 - Holographic / iridescent shader effects
 - GSAP-powered spring animations
 - Card details overlay (peer stats, mutual connections)
+- Card gallery: browse all your ordered cards, set any as active

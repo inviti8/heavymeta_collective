@@ -40,10 +40,10 @@ def generate_stellar_qr(uri):
     return f"data:image/png;base64,{b64}"
 
 
-def create_stellar_payment_request(tier_key='forge'):
+def create_stellar_payment_request(tier_key='forge', amount_xlm=None):
     order_id = str(uuid.uuid4())[:8]
     memo = f"hvym-{order_id}"
-    xlm_amount = str(get_xlm_amount(tier_key, 'join'))
+    xlm_amount = str(amount_xlm) if amount_xlm is not None else str(get_xlm_amount(tier_key, 'join'))
 
     stellar_uri = (
         f"web+stellar:pay"
