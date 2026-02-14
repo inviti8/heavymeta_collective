@@ -147,20 +147,20 @@ async def replace_asset(new_data: bytes, old_cid: str = None,
 
 _DEFAULT_COLORS = {
     "light": {
-        "primary": "#8c52ff",
-        "secondary": "#f2d894",
-        "text": "#000000",
-        "bg": "#ffffff",
-        "card": "#f5f5f5",
-        "border": "#e0e0e0",
+        "primary": "#7a48a9",
+        "secondary": "#9f7ac1",
+        "text": "#1f1f21",
+        "bg": "#efeff4",
+        "card": "#ffffff",
+        "border": "#cccccc",
     },
     "dark": {
-        "primary": "#a87aff",
-        "secondary": "#d4a843",
-        "text": "#f0f0f0",
-        "bg": "#1a1a1a",
-        "card": "#2a2a2a",
-        "border": "#444444",
+        "primary": "#7a48a9",
+        "secondary": "#9f7ac1",
+        "text": "#ffffff",
+        "bg": "#0d0d0d",
+        "card": "#242424",
+        "border": "#242424",
     },
 }
 

@@ -23,7 +23,7 @@ canvas.style.touchAction = 'none';
 // ─── Scene + Camera ────────────────────────────────────────────────────────
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1a1a2e);
+scene.background = new THREE.Color(0x0d0d0d);
 
 const camera = new THREE.PerspectiveCamera(
   45, window.innerWidth / window.innerHeight, 0.1, 100
@@ -582,7 +582,7 @@ function onScanSuccess(decodedText) {
         <div style="display: flex; gap: 12px; margin-top: 16px; justify-content: center;">
           <button onclick="document.getElementById('qr-scan-close').click(); window.addPeerCard && window.addPeerCard();"
                   style="padding: 8px 24px; border-radius: 8px;
-                         background: rgba(140,82,255,0.6); border: none;
+                         background: rgba(122,72,169,0.6); border: none;
                          color: white; cursor: pointer;">
             DONE
           </button>

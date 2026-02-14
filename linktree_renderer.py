@@ -2,13 +2,14 @@ import time as _time
 
 from nicegui import ui
 from config import KUBO_GATEWAY
+from theme import outline_glow_css, _hex_rgb
 
 
 def open_qr_dialog(qr_url: str):
     """Open a dialog showing the QR code image."""
     with ui.dialog() as dialog, ui.card().classes(
         'items-center p-6'
-    ).style('background-color: #1a1a2e; border-radius: 16px;'):
+    ).style('background-color: #0d0d0d; border-radius: 16px;'):
         ui.image(qr_url).classes('w-64 h-64 rounded-lg')
 
     dialog.open()
@@ -21,12 +22,12 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
     dark_mode = linktree.get('dark_mode', False)
     palette_key = 'dark' if dark_mode else 'light'
     colors = linktree.get('colors', {}).get(palette_key, {})
-    bg = colors.get('bg', '#ffffff')
-    txt = colors.get('text', '#000000')
-    acc = colors.get('primary', '#8c52ff')
-    lnk = colors.get('secondary', '#f2d894')
-    card_bg = colors.get('card', '#f5f5f5')
-    bdr = colors.get('border', '#e0e0e0')
+    bg = colors.get('bg', '#efeff4')
+    txt = colors.get('text', '#1f1f21')
+    acc = colors.get('primary', '#7a48a9')
+    lnk = colors.get('secondary', '#9f7ac1')
+    card_bg = colors.get('card', '#ffffff')
+    bdr = colors.get('border', '#cccccc')
     avatar_cid = linktree.get('avatar_cid')
     links = linktree.get('links', [])
     wallets = linktree.get('wallets', [])
@@ -36,12 +37,21 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
 
     ui.query('body').style(f'background-color: {bg};')
 
+    # Derive glow RGB from user's accent color
+    ar, ag, ab = _hex_rgb(acc)
+
     # Dark base + fade-in + 3D avatar scene CSS + icon color override
     ui.add_head_html(f'''
     <style>
-      html, body {{ background-color: #1a1a2e !important; }}
+      html, body {{ background-color: #0d0d0d !important; }}
       @keyframes fadeIn {{ from {{ opacity: 0; }} to {{ opacity: 1; }} }}
       .nicegui-content {{ animation: fadeIn 0.25s ease-out; }}
+      .q-card {{
+        border: 1px solid rgba({ar},{ag},{ab},0.55);
+        box-shadow: 0 0 2px rgba({ar},{ag},{ab},0.1),
+                    0 0 4px rgba({ar},{ag},{ab},0.25),
+                    0 0 6px rgba({ar},{ag},{ab},0.4);
+      }}
       #avatar-scene {{
         position: fixed;
         z-index: 99999;
@@ -81,7 +91,7 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
     ):
         if links:
             with ui.column().classes('w-full gap-2 p-4 rounded-lg').style(
-                f'border: 1px solid {bdr};'
+                outline_glow_css(acc)
             ):
                 ui.label('LINKS').classes('text-lg font-bold').style(f'color: {txt};')
                 for link in sorted(links, key=lambda l: l.get('sort_order', 0)):
@@ -104,7 +114,7 @@ def render_linktree(linktree: dict, ipns_name: str, is_preview: bool = False):
 
         if denom_wallets:
             with ui.column().classes('w-full gap-2 p-4 rounded-lg').style(
-                f'border: 1px solid {bdr};'
+                outline_glow_css(acc)
             ):
                 ui.label('WALLETS').classes('text-lg font-bold').style(f'color: {txt};')
                 for dw in denom_wallets:

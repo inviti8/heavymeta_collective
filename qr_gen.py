@@ -14,14 +14,14 @@ PLACEHOLDER = os.path.join(os.path.dirname(__file__), 'static', 'placeholder.png
 
 
 def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
-    """Convert '#8c52ff' to (140, 82, 255)."""
+    """Convert '#7a48a9' to (122, 72, 169)."""
     h = hex_color.lstrip('#')
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
 def generate_user_qr(url: str, avatar_path: str,
-                     fg_hex: str = '#8c52ff',
-                     bg_hex: str = '#ffffff') -> bytes:
+                     fg_hex: str = '#7a48a9',
+                     bg_hex: str = '#efeff4') -> bytes:
     """Generate a branded QR code with embedded avatar.
 
     Args:
@@ -86,8 +86,8 @@ async def _load_qr_style(user_id: str):
     settings = await _db.get_profile_settings(user_id)
 
     dark = bool(settings.get('dark_mode', 0))
-    fg = colors.get('dark_accent_color' if dark else 'accent_color', '#8c52ff')
-    bg = colors.get('dark_bg_color' if dark else 'bg_color', '#ffffff')
+    fg = colors.get('dark_accent_color' if dark else 'accent_color', '#7a48a9')
+    bg = colors.get('dark_bg_color' if dark else 'bg_color', '#efeff4')
 
     avatar_path = await get_avatar_path(dict(user).get('avatar_cid'))
     return fg, bg, avatar_path, dict(user)
@@ -176,8 +176,8 @@ async def regenerate_all_link_qrs(user_id: str):
 
 
 def generate_denom_qr(url: str, avatar_path: str, denomination: int,
-                      fg_hex: str = '#8c52ff',
-                      bg_hex: str = '#ffffff') -> bytes:
+                      fg_hex: str = '#7a48a9',
+                      bg_hex: str = '#efeff4') -> bytes:
     """Generate branded QR with avatar + denomination badge."""
     base_png = generate_user_qr(url, avatar_path, fg_hex, bg_hex)
     img = Image.open(io.BytesIO(base_png)).convert('RGBA')
@@ -213,7 +213,7 @@ def generate_qr_card_front(qr_png_bytes: bytes, bg_hex: str,
 
     Args:
         qr_png_bytes: PNG bytes of the QR code image.
-        bg_hex: Background color as hex string (e.g. '#8c52ff').
+        bg_hex: Background color as hex string (e.g. '#7a48a9').
         card_width: Card width in pixels (default 856 — NFC card ratio).
         card_height: Card height in pixels (default 540).
 

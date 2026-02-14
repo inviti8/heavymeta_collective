@@ -27,7 +27,7 @@ from wallet_ops import create_denom_wallet_for_user, build_pay_uri
 from email_service import send_card_order_email, send_qr_card_order_email
 from config import DENOM_PRESETS, BANKER_25519, GUARDIAN_25519, BANKER_KP
 from linktree_renderer import render_linktree
-from theme import apply_theme, load_and_apply_theme, resolve_active_palette
+from theme import apply_theme, load_and_apply_theme, resolve_active_palette, outline_glow_css
 import json
 import time as _time
 
@@ -275,6 +275,9 @@ async def profile():
     moniker = user['moniker']
     member_type = app.storage.user.get('member_type', 'free')
     psettings = await db.get_profile_settings(user_id)
+    colors = await db.get_profile_colors(user_id)
+    dark_mode = bool(psettings.get('dark_mode', 0))
+    palette = resolve_active_palette(colors, dark_mode)
 
     avatar_cid = dict(user).get('avatar_cid')
     header = dashboard_header(moniker, member_type, user_id=user_id,
@@ -329,7 +332,9 @@ async def profile():
                 ui.button('UPGRADE', on_click=lambda: open_auth_dialog('join')).classes('mt-2')
 
         # ── Links section with CRUD ──
-        with ui.column().classes('w-[75vw] gap-2 border p-4 rounded-lg'):
+        with ui.column().classes('w-[75vw] gap-2 p-4 rounded-lg').style(
+            outline_glow_css(palette['primary'])
+        ):
             ui.label('LINKS').classes('text-2xl font-bold')
 
             @ui.refreshable
@@ -445,7 +450,9 @@ async def profile():
         # Wallets section (paid tiers + network features enabled)
         show_network = bool(psettings.get('show_network', 0))
         if member_type != 'free' and show_network:
-            with ui.column().classes('w-[75vw] gap-2 border p-4 rounded-lg'):
+            with ui.column().classes('w-[75vw] gap-2 p-4 rounded-lg').style(
+                outline_glow_css(palette['primary'])
+            ):
                 ui.label('WALLETS').classes('text-2xl font-bold')
 
                 @ui.refreshable
@@ -505,7 +512,7 @@ async def profile():
                 def _open_qr_dialog(qr_url):
                     with ui.dialog() as dlg, ui.card().classes(
                         'items-center p-6'
-                    ).style('background-color: #1a1a2e; border-radius: 16px;'):
+                    ).style('background-color: #0d0d0d; border-radius: 16px;'):
                         ui.image(qr_url).classes('w-64 h-64 rounded-lg')
                     dlg.open()
 
@@ -1769,14 +1776,14 @@ async def settings():
                 def apply_live_theme():
                     """Update preview card + entire app UI."""
                     p = 'dark_' if mode_toggle.value else ''
-                    bg = state.get(f'{p}bg_color', '#ffffff')
-                    txt = state.get(f'{p}text_color', '#000000')
-                    acc = state.get(f'{p}accent_color', '#8c52ff')
-                    lnk = state.get(f'{p}link_color', '#f2d894')
-                    card_c = state.get(f'{p}card_color', '#f5f5f5')
-                    border_c = state.get(f'{p}border_color', '#e0e0e0')
+                    bg = state.get(f'{p}bg_color', '#efeff4')
+                    txt = state.get(f'{p}text_color', '#1f1f21')
+                    acc = state.get(f'{p}accent_color', '#7a48a9')
+                    lnk = state.get(f'{p}link_color', '#9f7ac1')
+                    card_c = state.get(f'{p}card_color', '#ffffff')
+                    border_c = state.get(f'{p}border_color', '#cccccc')
                     # Update preview card
-                    preview.style(f'background-color: {bg};')
+                    preview.style(f'background-color: {bg};' + outline_glow_css(acc))
                     preview_moniker.style(f'color: {txt};')
                     preview_badge.style(
                         f'background-color: {acc}40; display: inline-block; width: fit-content;'
@@ -1880,8 +1887,8 @@ async def settings():
                             png_bytes = generate_user_qr(
                                 pay_uri,
                                 os.path.join(static_files_dir, 'stellar_logo.png'),
-                                colors.get('accent_color', '#8c52ff'),
-                                colors.get('bg_color', '#ffffff'),
+                                colors.get('accent_color', '#7a48a9'),
+                                colors.get('bg_color', '#efeff4'),
                             )
                             b64 = base64.b64encode(png_bytes).decode()
                             data_uri = f'data:image/png;base64,{b64}'

@@ -29,18 +29,18 @@ CREATE TABLE IF NOT EXISTS link_tree (
 
 CREATE TABLE IF NOT EXISTS profile_colors (
     user_id           TEXT PRIMARY KEY REFERENCES users(id),
-    bg_color          TEXT DEFAULT '#ffffff',
-    text_color        TEXT DEFAULT '#000000',
-    accent_color      TEXT DEFAULT '#8c52ff',
-    link_color        TEXT DEFAULT '#f2d894',
-    card_color        TEXT DEFAULT '#f5f5f5',
-    border_color      TEXT DEFAULT '#e0e0e0',
-    dark_bg_color     TEXT DEFAULT '#1a1a1a',
-    dark_text_color   TEXT DEFAULT '#f0f0f0',
-    dark_accent_color TEXT DEFAULT '#a87aff',
-    dark_link_color   TEXT DEFAULT '#d4a843',
-    dark_card_color   TEXT DEFAULT '#2a2a2a',
-    dark_border_color TEXT DEFAULT '#444444'
+    bg_color          TEXT DEFAULT '#efeff4',
+    text_color        TEXT DEFAULT '#1f1f21',
+    accent_color      TEXT DEFAULT '#7a48a9',
+    link_color        TEXT DEFAULT '#9f7ac1',
+    card_color        TEXT DEFAULT '#ffffff',
+    border_color      TEXT DEFAULT '#cccccc',
+    dark_bg_color     TEXT DEFAULT '#0d0d0d',
+    dark_text_color   TEXT DEFAULT '#ffffff',
+    dark_accent_color TEXT DEFAULT '#7a48a9',
+    dark_link_color   TEXT DEFAULT '#9f7ac1',
+    dark_card_color   TEXT DEFAULT '#242424',
+    dark_border_color TEXT DEFAULT '#242424'
 );
 
 CREATE TABLE IF NOT EXISTS profile_settings (
@@ -348,18 +348,18 @@ async def get_link_by_id(link_id):
 # --- Profile Colors ---
 
 _COLOR_DEFAULTS = {
-    'bg_color': '#ffffff',
-    'text_color': '#000000',
-    'accent_color': '#8c52ff',
-    'link_color': '#f2d894',
-    'card_color': '#f5f5f5',
-    'border_color': '#e0e0e0',
-    'dark_bg_color': '#1a1a1a',
-    'dark_text_color': '#f0f0f0',
-    'dark_accent_color': '#a87aff',
-    'dark_link_color': '#d4a843',
-    'dark_card_color': '#2a2a2a',
-    'dark_border_color': '#444444',
+    'bg_color': '#efeff4',
+    'text_color': '#1f1f21',
+    'accent_color': '#7a48a9',
+    'link_color': '#9f7ac1',
+    'card_color': '#ffffff',
+    'border_color': '#cccccc',
+    'dark_bg_color': '#0d0d0d',
+    'dark_text_color': '#ffffff',
+    'dark_accent_color': '#7a48a9',
+    'dark_link_color': '#9f7ac1',
+    'dark_card_color': '#242424',
+    'dark_border_color': '#242424',
 }
 
 _COLOR_COLS = list(_COLOR_DEFAULTS.keys())

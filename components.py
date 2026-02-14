@@ -24,7 +24,7 @@ def image_with_text(img_src: str, text: str):
 def user_link(img_src: str, url: str):
     with ui.row().classes('items-center border py-2 px-4 mx-5 rounded-full').style('box-sizing: border-box;'):
         ui.image(img_src).classes('rounded-full w-[3vw] h-[3vw]')
-        ui.link(url).classes('text-[#8c52ff] font-semibold text-lg')
+        ui.link(url).classes('text-[#7a48a9] font-semibold text-lg')
 
 
 def user_wallet(img_src: str):
@@ -33,12 +33,17 @@ def user_wallet(img_src: str):
 
 def style_page(page_title: str):
     ui.page_title(page_title)
-    ui.colors(primary='#8c52ff', secondary='#2c2f36', accent='#ffffff', neutral='#f5f5f5')
+    ui.colors(primary='#7a48a9', secondary='#181818', accent='#ffffff', neutral='#efeff4')
     ui.add_head_html('''
     <style>
-      html, body { background-color: #1a1a2e !important; }
+      html, body { background-color: #0d0d0d !important; }
       @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
       .nicegui-content { animation: fadeIn 0.25s ease-out; }
+      .q-card {
+        box-shadow: 0 0 2px hsla(286,100%,50%,0.1),
+                    0 0 4px hsla(284,100%,50%,0.25),
+                    0 0 6px hsla(271,100%,50%,0.4);
+      }
     </style>
     ''')
     with ui.header().classes('items-center'):
@@ -59,7 +64,7 @@ def style_page(page_title: str):
 def dashboard_nav(active='dashboard'):
     """Bottom navigation bar for dashboard views. active = 'dashboard' | 'card_editor' | 'card_case' | 'qr_code'."""
     with ui.footer().classes(
-        'bg-[#8c52ff] flex justify-around items-center py-3'
+        'bg-[#7a48a9] flex justify-around items-center py-3'
     ) as footer:
         items = [
             ('badge', '/profile/edit', 'dashboard'),
@@ -83,9 +88,14 @@ def dashboard_header(moniker, member_type, user_id=None,
     moniker_slug = moniker.lower().replace(' ', '-')
     ui.add_head_html('''
     <style>
-      html, body { background-color: #1a1a2e !important; }
+      html, body { background-color: #0d0d0d !important; }
       @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
       .nicegui-content { animation: fadeIn 0.25s ease-out; }
+      .q-card {
+        box-shadow: 0 0 2px hsla(286,100%,50%,0.1),
+                    0 0 4px hsla(284,100%,50%,0.25),
+                    0 0 6px hsla(271,100%,50%,0.4);
+      }
       .q-page-container { padding-top: 0 !important; }
       .q-header { transition: transform 0.3s ease !important; }
       .q-footer { transition: transform 0.3s ease !important; }
@@ -110,7 +120,7 @@ def dashboard_header(moniker, member_type, user_id=None,
     ''')
     with ui.header(
     ).classes(
-        'text-black justify-start items-center bg-gradient-to-r from-[#f2d894] to-[#d6a5e2] pl-6'
+        'text-black justify-start items-center bg-gradient-to-r from-[#9f7ac1] to-[#7a48a9] pl-6'
     ).style('position: relative;') as header:
         # Top-left logout caret
         def _confirm_logout():

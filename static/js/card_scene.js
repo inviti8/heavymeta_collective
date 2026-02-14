@@ -17,7 +17,7 @@ container.appendChild(renderer.domElement);
 const canvas = renderer.domElement;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1a1a2e);
+scene.background = new THREE.Color(0x0d0d0d);
 
 const camera = new THREE.PerspectiveCamera(
   45, window.innerWidth / window.innerHeight, 0.1, 100
@@ -123,10 +123,10 @@ toggleBtn.innerHTML = `<span class="material-icons" style="font-size:20px;margin
 toggleBtn.style.cssText = `
   position: fixed; top: 16px; left: 16px; z-index: 6000;
   height: 40px; padding: 0 16px; border-radius: 20px;
-  background: rgba(140, 82, 255, 0.85); border: none; cursor: pointer;
+  background: rgba(122, 72, 169, 0.85); border: none; cursor: pointer;
   color: white; display: flex; align-items: center; justify-content: center;
   font-weight: 600; font-size: 14px; letter-spacing: 0.5px;
-  backdrop-filter: blur(4px); box-shadow: 0 2px 12px rgba(140,82,255,0.4);
+  backdrop-filter: blur(4px); box-shadow: 0 2px 12px rgba(122,72,169,0.4);
 `;
 toggleBtn.addEventListener('click', () => {
   const trigger = document.getElementById('card-mode-trigger');
@@ -246,9 +246,9 @@ cartBtn.innerHTML = '<span class="material-icons" style="font-size:28px;">shoppi
 cartBtn.style.cssText = `
   position: fixed; top: 16px; right: 16px; z-index: 6000;
   width: 52px; height: 52px; border-radius: 50%;
-  background: rgba(140, 82, 255, 0.85); border: none; cursor: pointer;
+  background: rgba(122, 72, 169, 0.85); border: none; cursor: pointer;
   color: white; display: flex; align-items: center; justify-content: center;
-  backdrop-filter: blur(4px); box-shadow: 0 2px 12px rgba(140,82,255,0.4);
+  backdrop-filter: blur(4px); box-shadow: 0 2px 12px rgba(122,72,169,0.4);
 `;
 cartBtn.addEventListener('click', () => {
   const trigger = document.getElementById('card-checkout-trigger');
