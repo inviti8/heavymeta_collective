@@ -1,4 +1,5 @@
 from nicegui import ui, app
+from payments.pricing import TIERS
 
 
 def form_field(label: str, placeholder: str, password=False, dense=False):
@@ -167,16 +168,13 @@ def dashboard_header(moniker, member_type, user_id=None,
             )
             with ui.column().classes('gap-1'):
                 ui.label(moniker).classes('text-2xl font-bold')
-                _BADGE_LABELS = {
-                    'free': 'FREE MEMBER', 'spark': 'SPARK MEMBER',
-                    'forge': 'FORGE MEMBER', 'founding_forge': 'FOUNDING FORGE',
-                    'anvil': 'ANVIL MEMBER',
-                }
-                badge_text = _BADGE_LABELS.get(member_type, member_type.upper())
+                tier_data = TIERS.get(member_type, TIERS['free'])
                 with ui.element('div').classes(
                     'bg-[#ffde59] px-3 py-1 rounded-lg shadow-md'
                 ).style('display: inline-block; width: fit-content;'):
-                    ui.label(badge_text).classes('text-xs font-bold')
+                    with ui.row().classes('items-center gap-1'):
+                        ui.image(tier_data['image']).classes('w-4 h-4')
+                        ui.label(tier_data['badge']).classes('text-xs font-bold')
 
                 # Override linktree row
                 with ui.row().classes('items-center gap-2 mt-1'):

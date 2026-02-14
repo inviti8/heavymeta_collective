@@ -848,16 +848,13 @@ async def settings():
                 preview = ui.card().classes('w-full p-6 rounded-lg gap-3 preview-card')
                 with preview:
                     preview_moniker = ui.label(moniker.upper()).classes('text-2xl font-bold')
+                    from payments.pricing import TIERS as _TIERS
+                    _tier_data = _TIERS.get(member_type, _TIERS['free'])
                     with ui.element('div').classes('px-3 py-1 rounded-lg').style(
                         'display: inline-block; width: fit-content;'
                     ) as preview_badge:
-                        _PREVIEW_BADGES = {
-                            'free': 'FREE MEMBER', 'spark': 'SPARK MEMBER',
-                            'forge': 'FORGE MEMBER', 'founding_forge': 'FOUNDING FORGE',
-                            'anvil': 'ANVIL MEMBER',
-                        }
                         preview_badge_label = ui.label(
-                            _PREVIEW_BADGES.get(member_type, member_type.upper())
+                            _tier_data['badge']
                         ).classes('text-xs font-bold')
                     preview_link1 = ui.label('example-link.com').classes('font-semibold')
                     preview_link2 = ui.label('another-link.com').classes('font-semibold')

@@ -1,43 +1,17 @@
+import json
+import os
 import time
 import requests
 import httpx
 
 # ── Tier definitions ──────────────────────────────────────────────
+# Loaded from static/tiers.json — single source of truth.
 # Prices are in USD. XLM/OPUS amounts calculated at runtime from live rates.
 # "join" = one-time enrollment fee. "annual" = yearly renewal.
 
-TIERS = {
-    'free': {
-        'label': 'FREE',
-        'description': 'Linktree only',
-        'join_usd': 0,
-        'annual_usd': 0,
-    },
-    'spark': {
-        'label': 'SPARK',
-        'description': 'QR cards, basic access',
-        'join_usd': 29.99,
-        'annual_usd': 49.99,
-    },
-    'forge': {
-        'label': 'FORGE',
-        'description': 'NFC cards, Pintheon node, full access',
-        'join_usd': 59.99,
-        'annual_usd': 99.99,
-    },
-    'founding_forge': {
-        'label': 'FOUNDING FORGE',
-        'description': 'Limited to 100 — governance vote, unlimited invites',
-        'join_usd': 79.99,
-        'annual_usd': 49.99,  # locked rate
-    },
-    'anvil': {
-        'label': 'ANVIL',
-        'description': 'Advisory board access',
-        'join_usd': 149.99,
-        'annual_usd': 249.99,
-    },
-}
+_TIERS_JSON = os.path.join(os.path.dirname(__file__), '..', 'static', 'tiers.json')
+with open(_TIERS_JSON, 'r') as _f:
+    TIERS = {t['key']: t for t in json.load(_f)}
 
 # ── Discount rates by payment method ─────────────────────────────
 # All discounts are off the USD base price.

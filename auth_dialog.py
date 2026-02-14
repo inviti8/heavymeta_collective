@@ -80,13 +80,11 @@ def open_auth_dialog(initial_tab='login'):
                 with ui.column().classes('w-full gap-0'):
                     ui.label('MEMBERSHIP TIER').classes('text-sm tracking-widest opacity-70')
 
-                    _tier_options = {
-                        'free':           'FREE — Linktree only',
-                        'spark':          'SPARK — $29.99 + $49.99/yr',
-                        'forge':          'FORGE — $59.99 + $99.99/yr',
-                        'founding_forge': 'FOUNDING FORGE — $79.99 + $49.99/yr',
-                        'anvil':          'ANVIL — $149.99 + $249.99/yr',
-                    }
+                    _tier_options = {}
+                    for _k, _t in TIERS.items():
+                        _price = (f"${_t['join_usd']:.0f} + ${_t['annual_usd']:.0f}/yr"
+                                  if _t['join_usd'] else 'Linktree only')
+                        _tier_options[_k] = f"{_t['label']} — {_price}"
 
                     tier = ui.select(
                         _tier_options, value='free',

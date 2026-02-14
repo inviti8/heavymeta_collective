@@ -1,0 +1,37 @@
+[
+  {
+    "index": 0, "key": "free", "label": "FREE",
+    "badge": "FREE MEMBER",
+    "description": "Linktree only",
+    "join_usd": 0, "annual_usd": 0,
+    "image": "/static/tier0.png"
+  },
+  {
+    "index": 1, "key": "spark", "label": "SPARK",
+    "badge": "SPARK MEMBER",
+    "description": "QR cards, basic access",
+    "join_usd": 29.99, "annual_usd": 49.99,
+    "image": "/static/tier1.png"
+  },
+  {
+    "index": 3, "key": "forge", "label": "FORGE",
+    "badge": "FORGE MEMBER",
+    "description": "NFC cards, Pintheon node, full access",
+    "join_usd": 59.99, "annual_usd": 99.99,
+    "image": "/static/tier3.png"
+  },
+  {
+    "index": 4, "key": "founding_forge", "label": "FOUNDING FORGE",
+    "badge": "FOUNDING FORGE",
+    "description": "Limited to 100 — governance vote, unlimited invites",
+    "join_usd": 79.99, "annual_usd": 49.99,
+    "image": "/static/tier4.png"
+  },
+  {
+    "index": 5, "key": "anvil", "label": "ANVIL",
+    "badge": "ANVIL MEMBER",
+    "description": "Advisory board access",
+    "join_usd": 149.99, "annual_usd": 249.99,
+    "image": "/static/tier5.png"
+  }
+]
