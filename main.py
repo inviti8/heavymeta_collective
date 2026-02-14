@@ -22,6 +22,7 @@ from qr_gen import (
     regenerate_qr, generate_link_qr, regenerate_all_link_qrs, generate_user_qr,
 )
 from wallet_ops import create_denom_wallet_for_user, build_pay_uri
+from email_service import send_card_order_email
 from config import DENOM_PRESETS, BANKER_25519, GUARDIAN_25519, BANKER_KP
 from linktree_renderer import render_linktree
 from theme import apply_theme, load_and_apply_theme, resolve_active_palette
@@ -895,6 +896,28 @@ def _open_shipping_dialog(card_id, payment_method, amount_usd, tx_hash=None):
                     payment_status='paid' if payment_method == 'entitlement' else 'paid',
                 )
                 await db.finalize_card_order(order_id, tx_hash=tx_hash)
+
+                # Send vendor fulfillment email (best-effort)
+                try:
+                    card_row = await db.get_user_card_by_id(card_id)
+                    user_row = await db.get_user_by_id(user_id)
+                    order_data = {
+                        'id': order_id,
+                        'payment_method': payment_method,
+                        'amount_usd': amount_usd,
+                        'shipping_name': name_field.value.strip(),
+                        'shipping_street': street_field.value.strip(),
+                        'shipping_city': city_field.value.strip(),
+                        'shipping_state': state_field.value.strip(),
+                        'shipping_zip': zip_field.value.strip(),
+                        'shipping_country': country_field.value.strip(),
+                    }
+                    send_card_order_email(
+                        order_data, user_row, card_row, config.KUBO_GATEWAY,
+                    )
+                except Exception:
+                    pass  # don't block on email failure
+
                 ship_dialog.close()
                 ui.notify('Card ordered! We\'ll ship it soon.', type='positive')
                 ui.navigate.to('/profile/edit')

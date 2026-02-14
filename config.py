@@ -67,3 +67,6 @@ KUBO_GATEWAY = os.getenv("KUBO_GATEWAY", "http://127.0.0.1:8081")
 # --- Denomination Wallets ---
 DENOM_PRESETS = [1, 2, 3, 5, 8, 13, 21]
 DENOM_FEE_PERCENT = 3  # Collective fee on each denom payment
+
+# --- Card Vendor ---
+CARD_VENDOR_EMAIL = os.environ.get("CARD_VENDOR_EMAIL", "")

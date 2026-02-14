@@ -1217,18 +1217,49 @@ allCards.forEach(entry => {
 
 ---
 
-### TODO: Card Order Fulfillment
+### Phase 4: Vendor Order Email Fulfillment
 
-> **This section is deferred to a follow-up task.**
+Card orders are finalized in the DB and communicated to the card vendor via email. The existing Mailtrap integration (`email_service.py`) sends a vendor fulfillment email containing order details, card image links (via IPFS gateway), and the shipping address.
 
-After card orders are created in the database, the following fulfillment pipeline needs to be built:
+#### Config
+
+- `CARD_VENDOR_EMAIL` env var in `config.py` — the vendor's email address. When empty, no vendor email is sent.
+
+#### `email_service.py` — `send_card_order_email()`
+
+Sends an HTML email to `CARD_VENDOR_EMAIL` with:
+- Order ID, member moniker + email + tier
+- Payment method + amount
+- Front/back card image links: `{KUBO_GATEWAY}/ipfs/{cid}`
+- Full shipping address (name, street, city, state, zip, country)
+
+Follows the same Mailtrap SDK pattern as `send_welcome_email()` and `send_launch_key_email()`. Wrapped in try/except — email failure never blocks order finalization.
+
+#### `db.py` — `get_user_card_by_id(card_id)`
+
+Simple lookup to retrieve a card row by ID (needed to read CIDs for the email).
+
+#### Integration Point
+
+The vendor email fires in exactly **one place**: `_open_shipping_dialog.handle_submit()` in `main.py`, after `finalize_card_order()` succeeds. The order data dict is built from local scope variables (shipping fields, payment method, amount). The card row is fetched via `get_user_card_by_id()` for image CIDs.
+
+The Stripe webhook path does NOT send the email — shipping info isn't available there (it's collected on the `/card/order/success` redirect, which opens the shipping dialog).
+
+#### Files Modified
+
+| File | Change |
+|------|--------|
+| `config.py` | `CARD_VENDOR_EMAIL` env var |
+| `.env.example` | `CARD_VENDOR_EMAIL=` placeholder |
+| `email_service.py` | `send_card_order_email()` function |
+| `db.py` | `get_user_card_by_id()` helper |
+| `main.py` | Import + call in `handle_submit()` |
+
+#### Future Fulfillment Work
 
 - [ ] Admin dashboard to view/manage card orders (`/admin/orders`)
 - [ ] Order status progression: `pending` → `processing` → `shipped` → `delivered`
-- [ ] Integration with print-on-demand / NFC card vendor API
-- [ ] Shipping label generation + tracking number storage
-- [ ] Email notifications at each status change (Mailtrap)
-- [ ] Card image export: render front/back CIDs as print-ready PNGs (856×540 @ 300 DPI)
+- [ ] Email notifications at each status change
 - [ ] Bulk order batching (aggregate orders for vendor submission)
 - [ ] Reorder flow: clone an existing card design into a new draft
 - [ ] Order history view in member settings

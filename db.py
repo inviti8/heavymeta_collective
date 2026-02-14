@@ -550,6 +550,15 @@ async def create_user_card(user_id):
     return card_id
 
 
+async def get_user_card_by_id(card_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM user_cards WHERE id = ?", (card_id,)
+        )
+        return await cursor.fetchone()
+
+
 async def get_draft_card(user_id):
     async with aiosqlite.connect(DATABASE_PATH) as conn:
         conn.row_factory = aiosqlite.Row
