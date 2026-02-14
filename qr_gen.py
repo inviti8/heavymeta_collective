@@ -207,6 +207,70 @@ def generate_denom_qr(url: str, avatar_path: str, denomination: int,
     return buf.getvalue()
 
 
+def generate_qr_card_front(qr_png_bytes: bytes, bg_hex: str,
+                           card_width: int = 856, card_height: int = 540) -> bytes:
+    """Generate a QR business card front: solid color background + centered QR.
+
+    Args:
+        qr_png_bytes: PNG bytes of the QR code image.
+        bg_hex: Background color as hex string (e.g. '#8c52ff').
+        card_width: Card width in pixels (default 856 — NFC card ratio).
+        card_height: Card height in pixels (default 540).
+
+    Returns:
+        PNG image bytes of the composite card front.
+    """
+    bg_rgb = hex_to_rgb(bg_hex)
+    card = Image.new('RGBA', (card_width, card_height), (*bg_rgb, 255))
+
+    qr_img = Image.open(io.BytesIO(qr_png_bytes)).convert('RGBA')
+    # Scale QR to 80% of card height, maintain aspect ratio
+    target_h = int(card_height * 0.8)
+    aspect = qr_img.width / qr_img.height
+    target_w = int(target_h * aspect)
+    qr_img = qr_img.resize((target_w, target_h), Image.LANCZOS)
+
+    # Center on card
+    x = (card_width - target_w) // 2
+    y = (card_height - target_h) // 2
+    card.paste(qr_img, (x, y), qr_img)
+
+    buf = io.BytesIO()
+    card.save(buf, format='PNG')
+    return buf.getvalue()
+
+
+async def regenerate_qr_card_front(user_id: str) -> str | None:
+    """Regenerate the QR card front composite and store in IPFS + DB.
+
+    Returns the new front_image_cid or None on failure.
+    """
+    import ipfs_client
+    import db as _db
+
+    style = await _load_qr_style(user_id)
+    if not style:
+        return None
+    fg, bg, avatar_path, user = style
+
+    try:
+        slug = user['moniker'].lower().replace(' ', '-')
+        url = f'/profile/{slug}'
+
+        qr_bytes = generate_user_qr(url, avatar_path, fg, bg)
+        card_front_bytes = generate_qr_card_front(qr_bytes, bg)
+
+        qr_card = await _db.get_qr_card(user_id)
+        old_cid = dict(qr_card).get('front_image_cid') if qr_card else None
+        new_cid = await ipfs_client.replace_asset(
+            card_front_bytes, old_cid, 'qr_card_front.png'
+        )
+        await _db.upsert_qr_card(user_id, front_image_cid=new_cid)
+        return new_cid
+    finally:
+        _cleanup_avatar(user, avatar_path)
+
+
 async def generate_denom_wallet_qr(user_id: str, wallet_id: str, pay_uri: str,
                                     denomination: int):
     """Generate branded denom QR, pin to IPFS, update DB."""

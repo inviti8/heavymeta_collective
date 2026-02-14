@@ -13,6 +13,7 @@ from auth import set_session, require_auth, require_paid
 from enrollment import process_paid_enrollment, finalize_pending_enrollment
 from payments.stripe_pay import (
     handle_webhook, retrieve_checkout_session, create_card_checkout_session,
+    create_qr_card_checkout_session,
 )
 from auth_dialog import open_auth_dialog
 from launch import generate_launch_credentials
@@ -20,9 +21,10 @@ from stellar_ops import get_xlm_balance, send_xlm
 import ipfs_client
 from qr_gen import (
     regenerate_qr, generate_link_qr, regenerate_all_link_qrs, generate_user_qr,
+    regenerate_qr_card_front,
 )
 from wallet_ops import create_denom_wallet_for_user, build_pay_uri
-from email_service import send_card_order_email
+from email_service import send_card_order_email, send_qr_card_order_email
 from config import DENOM_PRESETS, BANKER_25519, GUARDIAN_25519, BANKER_KP
 from linktree_renderer import render_linktree
 from theme import apply_theme, load_and_apply_theme, resolve_active_palette
@@ -47,6 +49,11 @@ async def stripe_webhook(request: Request):
 
     if result.get('completed'):
         purchase_type = result.get('purchase_type', 'enrollment')
+
+        if purchase_type == 'qr_card':
+            # QR card purchase — payment confirmed but shipping not yet collected.
+            # Finalization happens in the shipping dialog after redirect.
+            return {'status': 'ok'}
 
         if purchase_type == 'card':
             # Card purchase — finalize card order
@@ -302,6 +309,7 @@ async def profile():
             await db.update_user(user_id, avatar_cid=new_cid)
             await regenerate_qr(user_id)
             await regenerate_all_link_qrs(user_id)
+            await regenerate_qr_card_front(user_id)
             ipfs_client.schedule_republish(user_id)
             ui.notify('Avatar updated', type='positive')
         except Exception as e:
@@ -536,7 +544,7 @@ async def card_editor():
     member_type = app.storage.user.get('member_type', 'free')
     psettings = await db.get_profile_settings(user_id)
 
-    # Get or create a draft card
+    # Get or create a draft card (NFC)
     draft = await db.get_draft_card(user_id)
     if not draft:
         card_id = await db.create_user_card(user_id)
@@ -548,6 +556,19 @@ async def card_editor():
     existing_back_cid = draft['back_image_cid'] if draft else None
     initial_front_url = f'{config.KUBO_GATEWAY}/ipfs/{existing_front_cid}' if existing_front_cid else ''
     initial_back_url = f'{config.KUBO_GATEWAY}/ipfs/{existing_back_cid}' if existing_back_cid else ''
+
+    # QR card data
+    qr_card = await db.get_qr_card(user_id)
+    qr_front_cid = dict(qr_card).get('front_image_cid') if qr_card else None
+    qr_back_cid = dict(qr_card).get('back_image_cid') if qr_card else None
+    # Auto-generate QR front if none exists
+    if not qr_front_cid:
+        qr_front_cid = await regenerate_qr_card_front(user_id)
+    qr_front_url = f'{config.KUBO_GATEWAY}/ipfs/{qr_front_cid}' if qr_front_cid else ''
+    qr_back_url = f'{config.KUBO_GATEWAY}/ipfs/{qr_back_cid}' if qr_back_cid else ''
+
+    # Mode state (persisted in session storage)
+    current_mode = app.storage.user.get('card_editor_mode', 'nfc')
 
     # Header hidden, footer visible
     header = dashboard_header(moniker, member_type, user_id=user_id,
@@ -568,6 +589,7 @@ async def card_editor():
 
     # File upload bridge (Python side)
     async def process_upload():
+        nonlocal current_mode
         try:
             result = await ui.run_javascript(
                 'return {data: window.__cardUploadData, face: window.__cardUploadFace}',
@@ -586,6 +608,28 @@ async def card_editor():
             ui.notify('No image data received', type='warning')
             return
 
+        # QR mode: front is server-generated (no-op), back saves to qr_cards
+        if current_mode == 'qr':
+            if face == 'front':
+                return  # server-generated, no upload
+            try:
+                import base64
+                content = base64.b64decode(b64_data)
+                qr_row = await db.get_qr_card(user_id)
+                old_cid = dict(qr_row).get('back_image_cid') if qr_row else None
+                new_cid = await ipfs_client.replace_asset(content, old_cid, 'qr_card_back.png')
+                await db.upsert_qr_card(user_id, back_image_cid=new_cid)
+                texture_url = f'{config.KUBO_GATEWAY}/ipfs/{new_cid}'
+                await ui.run_javascript(f"window.updateCardTexture('back', '{texture_url}')")
+                ui.notify('QR card back image saved', type='positive')
+            except httpx.ConnectError:
+                ui.notify('IPFS daemon not running — preview applied but not saved',
+                          type='warning')
+            except Exception as e:
+                ui.notify(f'Upload failed: {e}', type='negative')
+            return
+
+        # NFC mode: existing logic
         cid_field = 'front_image_cid' if face == 'front' else 'back_image_cid'
         filename = 'nfc_card_front.png' if face == 'front' else 'nfc_card_back.png'
 
@@ -610,8 +654,62 @@ async def card_editor():
     upload_trigger = ui.button(on_click=process_upload).props(
         'id=card-upload-trigger').style('position:absolute;left:-9999px;')
 
+    # Mode toggle trigger (clicked by JS toggle button)
+    async def toggle_mode():
+        nonlocal current_mode
+        current_mode = 'qr' if current_mode == 'nfc' else 'nfc'
+        app.storage.user['card_editor_mode'] = current_mode
+        await ui.run_javascript(f"window.setCardMode('{current_mode}')")
+        # Swap textures based on new mode
+        if current_mode == 'qr':
+            qr_row = await db.get_qr_card(user_id)
+            fc = dict(qr_row).get('front_image_cid') if qr_row else None
+            bc = dict(qr_row).get('back_image_cid') if qr_row else None
+            if fc:
+                await ui.run_javascript(
+                    f"window.updateCardTexture('front', '{config.KUBO_GATEWAY}/ipfs/{fc}')"
+                )
+            if bc:
+                await ui.run_javascript(
+                    f"window.updateCardTexture('back', '{config.KUBO_GATEWAY}/ipfs/{bc}')"
+                )
+        else:
+            current_draft = await db.get_draft_card(user_id)
+            fc = current_draft['front_image_cid'] if current_draft else None
+            bc = current_draft['back_image_cid'] if current_draft else None
+            if fc:
+                await ui.run_javascript(
+                    f"window.updateCardTexture('front', '{config.KUBO_GATEWAY}/ipfs/{fc}')"
+                )
+            if bc:
+                await ui.run_javascript(
+                    f"window.updateCardTexture('back', '{config.KUBO_GATEWAY}/ipfs/{bc}')"
+                )
+
+    ui.button(on_click=toggle_mode).props(
+        'id=card-mode-trigger').style('position:absolute;left:-9999px;')
+
     # Checkout trigger (clicked by JS cart button)
     async def start_checkout():
+        nonlocal current_mode
+        if current_mode == 'qr':
+            # QR card checkout
+            qr_row = await db.get_qr_card(user_id)
+            qr_fc = dict(qr_row).get('front_image_cid') if qr_row else None
+            qr_bc = dict(qr_row).get('back_image_cid') if qr_row else None
+            if not qr_fc or not qr_bc:
+                ui.notify('Upload a back image for your QR card before ordering', type='warning')
+                return
+            from payments.pricing import TIERS as _TIERS
+            tier = _TIERS.get(member_type, _TIERS['free'])
+            qr_price_usd = tier.get('qr_card_price_usd', 4.99)
+            qr_included = tier.get('qr_cards_included', 0)
+            ordered_qr = await db.count_ordered_qr_cards(user_id)
+            remaining = max(0, qr_included - ordered_qr)
+            _open_qr_card_checkout_dialog(user_id, qr_price_usd, remaining)
+            return
+
+        # NFC card checkout (existing)
         current_draft = await db.get_draft_card(user_id)
         if not current_draft or not current_draft['front_image_cid'] or not current_draft['back_image_cid']:
             ui.notify('Upload both front and back images before ordering', type='warning')
@@ -639,7 +737,10 @@ async def card_editor():
     <div id="card-scene"
          data-front-texture="{initial_front_url}"
          data-back-texture="{initial_back_url}"
-         data-card-id="{card_id}"></div>
+         data-card-id="{card_id}"
+         data-card-mode="{current_mode}"
+         data-qr-front-texture="{qr_front_url}"
+         data-qr-back-texture="{qr_back_url}"></div>
     <script type="module" src="/static/js/card_scene.js?v={_cache_v}"></script>
     ''')
 
@@ -959,6 +1060,357 @@ async def card_order_success(session_id: str = ''):
 
     # Open shipping dialog for the purchased card
     _open_shipping_dialog(card_id, 'stripe', 0, tx_hash=session_id)
+
+
+# ─── QR Card Checkout Dialog ─────────────────────────────────────────────────
+
+def _open_qr_card_checkout_dialog(user_id, qr_price_usd, remaining_entitled):
+    """Payment dialog for QR card purchases. Quantity field + CARD/XLM tabs."""
+    from payments.pricing import async_fetch_xlm_price, fetch_xlm_price
+    from payments.stellar_pay import create_stellar_payment_request
+    from components import form_field
+    import uuid as _uuid
+
+    member_type = app.storage.user.get('member_type', 'free')
+    _cached_price = None
+
+    with ui.dialog().props('persistent') as pay_dialog, \
+         ui.card().classes('w-full max-w-lg mx-auto p-6 gap-0').style(
+             'max-height: 90vh; overflow-y: auto;'
+         ) as pay_card:
+
+        with ui.row().classes('w-full items-center justify-between mb-4'):
+            ui.label('ORDER QR CARDS').classes('text-xl font-semibold tracking-wide')
+            ui.button(icon='close', on_click=pay_dialog.close).props('flat round dense')
+
+        ui.label(f'QR Business Cards — ${qr_price_usd:.2f} each').classes('text-sm font-bold mb-2')
+
+        qty_field = ui.number(
+            'Quantity', value=50, min=50, step=10,
+        ).classes('w-full mb-2').props('outlined dense')
+
+        total_label = ui.label('').classes('text-lg font-bold mb-2')
+        entitled_label = ui.label('').classes('text-sm text-green-600')
+        entitled_label.set_visibility(False)
+
+        def update_total():
+            qty = int(qty_field.value or 50)
+            billable = max(0, qty - remaining_entitled)
+            total = round(billable * qr_price_usd, 2)
+            if billable == 0:
+                total_label.text = f'TOTAL: $0.00 USD'
+                entitled_label.text = f'{qty} cards covered by your membership'
+                entitled_label.set_visibility(True)
+            else:
+                if remaining_entitled > 0:
+                    entitled_label.text = f'{remaining_entitled} cards covered by membership, {billable} billable'
+                    entitled_label.set_visibility(True)
+                else:
+                    entitled_label.set_visibility(False)
+                total_label.text = f'TOTAL: ${total:.2f} USD'
+            update_pay_button()
+
+        qty_field.on_value_change(lambda: update_total())
+
+        with ui.tabs().classes('w-full') as pay_tabs:
+            card_tab = ui.tab('CARD')
+            xlm_tab = ui.tab('XLM')
+        pay_tabs.value = 'CARD'
+
+        with ui.tab_panels(pay_tabs).classes('w-full'):
+            with ui.tab_panel(card_tab):
+                ui.label('Pay with credit or debit card').classes('text-sm opacity-70')
+            with ui.tab_panel(xlm_tab):
+                xlm_price_label = ui.label(
+                    'XLM PRICE: calculating...'
+                ).classes('text-sm font-bold')
+                ui.label('Pay with XLM at current exchange rate').classes(
+                    'text-sm text-amber-600 font-medium'
+                )
+
+        pay_error = ui.label('').classes('text-red-500 text-sm')
+        pay_error.set_visibility(False)
+
+        async def load_prices():
+            nonlocal _cached_price
+            if _cached_price is not None:
+                return
+            price = await async_fetch_xlm_price()
+            _cached_price = price
+            update_total()
+
+        def update_pay_button():
+            qty = int(qty_field.value or 50)
+            billable = max(0, qty - remaining_entitled)
+            total = round(billable * qr_price_usd, 2)
+            if billable == 0:
+                pay_btn.text = f'ORDER (FREE)'
+                pay_btn.enable()
+            elif pay_tabs.value == 'CARD':
+                pay_btn.text = f'PAY ${total:.2f}'
+                pay_btn.enable()
+            elif pay_tabs.value == 'XLM':
+                if _cached_price and _cached_price > 0:
+                    xlm_amt = round(total / _cached_price, 2)
+                    pay_btn.text = f'PAY {xlm_amt} XLM'
+                    xlm_price_label.text = f'XLM PRICE: {xlm_amt} XLM (~${total:.2f} USD)'
+                else:
+                    pay_btn.text = 'PAY WITH XLM'
+                pay_btn.enable()
+
+        pay_tabs.on_value_change(lambda: update_pay_button())
+
+        async def handle_pay():
+            pay_error.set_visibility(False)
+            qty = int(qty_field.value or 50)
+            if qty < 50:
+                pay_error.text = 'Minimum order is 50 cards.'
+                pay_error.set_visibility(True)
+                return
+
+            billable = max(0, qty - remaining_entitled)
+            total = round(billable * qr_price_usd, 2)
+
+            if billable == 0:
+                # Fully entitled — skip payment, go to shipping
+                pay_dialog.close()
+                _open_qr_shipping_dialog(user_id, 'entitlement', 0, qty)
+                return
+
+            if pay_tabs.value == 'XLM':
+                xlm_price = _cached_price or fetch_xlm_price()
+                xlm_amount = round(total / xlm_price, 2) if xlm_price > 0 else 0
+                pay_req = create_stellar_payment_request(amount_xlm=xlm_amount)
+                pending = {
+                    'order_id': pay_req['order_id'],
+                    'memo': pay_req['memo'],
+                    'qr': pay_req['qr'],
+                    'address': pay_req['address'],
+                    'amount': pay_req['amount'],
+                    'amount_usd': total,
+                    'quantity': qty,
+                }
+                _show_qr_card_xlm_payment(pay_card, pending, pay_dialog)
+
+            elif pay_tabs.value == 'CARD':
+                try:
+                    user = await db.get_user_by_id(user_id)
+                    session = create_qr_card_checkout_session(
+                        email=user['email'],
+                        amount_usd=total,
+                        quantity=qty,
+                        user_id=user_id,
+                    )
+                    app.storage.user['pending_qr_card_stripe'] = {
+                        'quantity': qty,
+                        'amount_usd': total,
+                    }
+                    pay_dialog.close()
+                    await ui.run_javascript(
+                        f"window.location.href='{session.url}'"
+                    )
+                except Exception as e:
+                    pay_error.text = f'Payment setup failed: {e}'
+                    pay_error.set_visibility(True)
+
+        pay_btn = ui.button(
+            'ORDER (FREE)',
+            on_click=handle_pay,
+        ).classes('mt-8 px-8 py-3 text-lg w-full')
+
+    pay_dialog.open()
+    update_total()
+    ui.timer(0.1, load_prices, once=True)
+
+
+# ─── QR Card XLM Payment ─────────────────────────────────────────────────────
+
+def _show_qr_card_xlm_payment(pay_card, pending, pay_dialog):
+    """XLM payment QR view for QR card purchases."""
+    from payments.stellar_pay import check_payment
+    _timer_ref = None
+
+    user_id = app.storage.user.get('user_id')
+
+    def cleanup_and_close():
+        nonlocal _timer_ref
+        if _timer_ref is not None:
+            try:
+                _timer_ref.deactivate()
+            except Exception:
+                pass
+            _timer_ref = None
+        pay_dialog.close()
+
+    pay_card.clear()
+    with pay_card:
+        with ui.row().classes('w-full items-center justify-between mb-4'):
+            ui.label('COMPLETE YOUR PAYMENT').classes('text-xl font-semibold tracking-wide')
+            ui.button(icon='close', on_click=cleanup_and_close).props('flat round dense')
+
+        ui.label(f'Send exactly {pending["amount"]} XLM to:').classes('text-lg')
+
+        with ui.card().classes('w-full items-center p-6 gap-4'):
+            ui.image(pending['qr']).classes('w-64 h-64')
+
+            with ui.row().classes('items-center gap-2 w-full'):
+                ui.label('Address:').classes('font-bold text-sm')
+                ui.label(pending['address']).classes('text-xs font-mono break-all flex-1')
+                ui.button(icon='content_copy', on_click=lambda: ui.run_javascript(
+                    f"navigator.clipboard.writeText('{pending['address']}')"
+                )).props('flat dense size=sm')
+
+            with ui.row().classes('items-center gap-2'):
+                ui.label('Amount:').classes('font-bold text-sm')
+                ui.label(f'{pending["amount"]} XLM').classes('text-sm')
+
+            with ui.row().classes('items-center gap-2 w-full'):
+                ui.label('Memo:').classes('font-bold text-sm')
+                ui.label(pending['memo']).classes('text-xs font-mono flex-1')
+                ui.button(icon='content_copy', on_click=lambda: ui.run_javascript(
+                    f"navigator.clipboard.writeText('{pending['memo']}')"
+                )).props('flat dense size=sm')
+
+            ui.separator()
+            status_label = ui.label('Waiting for payment...').classes('text-sm opacity-70')
+            spinner = ui.spinner('dots', size='lg')
+
+        async def check_and_update():
+            result = check_payment(pending['memo'])
+            if result['paid']:
+                _timer_ref.deactivate()
+                spinner.set_visibility(False)
+                status_label.text = 'Payment confirmed!'
+                pay_dialog.close()
+                _open_qr_shipping_dialog(
+                    user_id, 'stellar',
+                    pending['amount_usd'], pending['quantity'],
+                    tx_hash=result['hash'],
+                )
+
+        _timer_ref = ui.timer(5.0, check_and_update)
+
+
+# ─── QR Card Shipping Dialog ─────────────────────────────────────────────────
+
+def _open_qr_shipping_dialog(user_id, payment_method, amount_usd, quantity,
+                              tx_hash=None):
+    """Collect shipping info and finalize QR card order."""
+    from components import form_field
+
+    with ui.dialog().props('persistent') as ship_dialog, \
+         ui.card().classes('w-full max-w-lg mx-auto p-6 gap-2').style(
+             'max-height: 90vh; overflow-y: auto;'
+         ):
+
+        with ui.row().classes('w-full items-center justify-between mb-2'):
+            ui.label('SHIPPING ADDRESS').classes('text-xl font-semibold tracking-wide')
+            ui.button(icon='close', on_click=ship_dialog.close).props('flat round dense')
+
+        ui.label(f'Where should we send your {quantity} QR cards?').classes(
+            'text-sm opacity-70 mb-2'
+        )
+
+        name_field = form_field('NAME', 'Full name', dense=True)
+        street_field = form_field('STREET', 'Street address', dense=True)
+        city_field = form_field('CITY', 'City', dense=True)
+        state_field = form_field('STATE / PROVINCE', 'State or province', dense=True)
+        zip_field = form_field('ZIP / POSTAL CODE', 'Postal code', dense=True)
+        country_field = form_field('COUNTRY', 'Country', dense=True)
+
+        ship_error = ui.label('').classes('text-red-500 text-sm')
+        ship_error.set_visibility(False)
+
+        async def handle_submit():
+            ship_error.set_visibility(False)
+            if not all([name_field.value, street_field.value, city_field.value,
+                        zip_field.value, country_field.value]):
+                ship_error.text = 'Please fill in all required fields.'
+                ship_error.set_visibility(True)
+                return
+
+            try:
+                order_id = await db.create_card_order(
+                    user_id=user_id,
+                    card_id=user_id,  # QR cards use user_id as card_id
+                    payment_method=payment_method,
+                    amount_usd=amount_usd,
+                    shipping_name=name_field.value.strip(),
+                    shipping_street=street_field.value.strip(),
+                    shipping_city=city_field.value.strip(),
+                    shipping_state=state_field.value.strip(),
+                    shipping_zip=zip_field.value.strip(),
+                    shipping_country=country_field.value.strip(),
+                    tx_hash=tx_hash,
+                    payment_status='paid',
+                    card_type='qr',
+                    quantity=quantity,
+                )
+                await db.finalize_card_order(order_id, tx_hash=tx_hash)
+
+                # Send vendor fulfillment email (best-effort)
+                try:
+                    user_row = await db.get_user_by_id(user_id)
+                    qr_card_row = await db.get_qr_card(user_id)
+                    order_data = {
+                        'id': order_id,
+                        'payment_method': payment_method,
+                        'amount_usd': amount_usd,
+                        'quantity': quantity,
+                        'shipping_name': name_field.value.strip(),
+                        'shipping_street': street_field.value.strip(),
+                        'shipping_city': city_field.value.strip(),
+                        'shipping_state': state_field.value.strip(),
+                        'shipping_zip': zip_field.value.strip(),
+                        'shipping_country': country_field.value.strip(),
+                    }
+                    send_qr_card_order_email(
+                        order_data, user_row, qr_card_row, config.KUBO_GATEWAY,
+                    )
+                except Exception:
+                    pass  # don't block on email failure
+
+                ship_dialog.close()
+                ui.notify(f'{quantity} QR cards ordered! We\'ll ship them soon.', type='positive')
+                ui.navigate.to('/profile/edit')
+            except Exception as e:
+                ship_error.text = f'Order failed: {e}'
+                ship_error.set_visibility(True)
+
+        ui.button('PLACE ORDER', on_click=handle_submit).classes(
+            'mt-4 px-8 py-3 text-lg w-full'
+        )
+
+    ship_dialog.open()
+
+
+# ─── QR Card Order Success (Stripe redirect) ─────────────────────────────────
+
+@ui.page('/qr-card/order/success')
+async def qr_card_order_success(session_id: str = ''):
+    """Stripe redirects here after QR card purchase. Collects shipping then finalizes."""
+    if not require_auth():
+        return
+
+    user_id = app.storage.user.get('user_id')
+    pending = app.storage.user.get('pending_qr_card_stripe', {})
+    quantity = pending.get('quantity')
+    amount_usd = pending.get('amount_usd', 0)
+
+    if not quantity:
+        style_page('QR Card Order')
+        with ui.column().classes('w-full items-center gap-8 mt-12'):
+            ui.label('Session expired.').classes('text-2xl font-semibold')
+            ui.button('BACK TO EDITOR', on_click=lambda: ui.navigate.to('/card/editor'))
+        return
+
+    style_page('QR Card Order — Shipping')
+
+    # Clean up pending state
+    if 'pending_qr_card_stripe' in app.storage.user:
+        del app.storage.user['pending_qr_card_stripe']
+
+    _open_qr_shipping_dialog(user_id, 'stripe', amount_usd, quantity, tx_hash=session_id)
 
 
 # ─── Card Wallet (3D) ────────────────────────────────────────────────────────
@@ -1357,6 +1809,7 @@ async def settings():
                     )
                     await regenerate_qr(user_id)
                     await regenerate_all_link_qrs(user_id)
+                    await regenerate_qr_card_front(user_id)
                     ipfs_client.schedule_republish(user_id)
                     save_label.text = 'Settings saved!'
                     save_label.set_visibility(True)

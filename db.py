@@ -99,11 +99,13 @@ CREATE TABLE IF NOT EXISTS user_cards (
 CREATE TABLE IF NOT EXISTS card_orders (
     id               TEXT PRIMARY KEY,
     user_id          TEXT NOT NULL REFERENCES users(id),
-    card_id          TEXT NOT NULL REFERENCES user_cards(id),
+    card_id          TEXT NOT NULL,
     payment_method   TEXT,
     payment_status   TEXT DEFAULT 'pending',
     tx_hash          TEXT,
     amount_usd       REAL,
+    card_type        TEXT DEFAULT 'nfc',
+    quantity         INTEGER DEFAULT 1,
     shipping_name    TEXT,
     shipping_street  TEXT,
     shipping_city    TEXT,
@@ -112,6 +114,13 @@ CREATE TABLE IF NOT EXISTS card_orders (
     shipping_country TEXT,
     order_status     TEXT DEFAULT 'pending',
     created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS qr_cards (
+    user_id         TEXT PRIMARY KEY REFERENCES users(id),
+    front_image_cid TEXT,
+    back_image_cid  TEXT,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -156,6 +165,9 @@ async def init_db():
                FROM users
                WHERE nfc_image_cid IS NOT NULL
                AND NOT EXISTS (SELECT 1 FROM user_cards WHERE user_cards.user_id = users.id)""",
+            # QR card support
+            "ALTER TABLE card_orders ADD COLUMN card_type TEXT DEFAULT 'nfc'",
+            "ALTER TABLE card_orders ADD COLUMN quantity INTEGER DEFAULT 1",
         ]
         for sql in migrations:
             try:
@@ -633,18 +645,20 @@ async def count_ordered_cards(user_id):
 async def create_card_order(*, user_id, card_id, payment_method, amount_usd,
                             shipping_name, shipping_street, shipping_city,
                             shipping_state, shipping_zip, shipping_country,
-                            tx_hash=None, payment_status='pending'):
+                            tx_hash=None, payment_status='pending',
+                            card_type='nfc', quantity=1):
     order_id = str(uuid.uuid4())
     async with aiosqlite.connect(DATABASE_PATH) as conn:
         await conn.execute(
             """INSERT INTO card_orders
                (id, user_id, card_id, payment_method, payment_status, tx_hash,
-                amount_usd, shipping_name, shipping_street, shipping_city,
-                shipping_state, shipping_zip, shipping_country)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                amount_usd, card_type, quantity, shipping_name, shipping_street,
+                shipping_city, shipping_state, shipping_zip, shipping_country)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (order_id, user_id, card_id, payment_method, payment_status,
-             tx_hash, amount_usd, shipping_name, shipping_street,
-             shipping_city, shipping_state, shipping_zip, shipping_country),
+             tx_hash, amount_usd, card_type, quantity, shipping_name,
+             shipping_street, shipping_city, shipping_state, shipping_zip,
+             shipping_country),
         )
         await conn.commit()
     return order_id
@@ -670,20 +684,63 @@ async def finalize_card_order(order_id, tx_hash=None):
         )
         order = await cursor.fetchone()
         if order:
-            card_id = order['card_id']
-            user_id = order['user_id']
-            # Mark card as ordered
-            await conn.execute(
-                "UPDATE user_cards SET status = 'ordered' WHERE id = ?",
-                (card_id,),
-            )
-            # Set as active card
-            await conn.execute(
-                "UPDATE user_cards SET is_active = 0 WHERE user_id = ?",
-                (user_id,),
-            )
-            await conn.execute(
-                "UPDATE user_cards SET is_active = 1 WHERE id = ?",
-                (card_id,),
-            )
+            card_type = order['card_type'] if 'card_type' in order.keys() else 'nfc'
+            # QR cards don't live in user_cards — skip status/active updates
+            if card_type != 'qr':
+                card_id = order['card_id']
+                user_id = order['user_id']
+                # Mark card as ordered
+                await conn.execute(
+                    "UPDATE user_cards SET status = 'ordered' WHERE id = ?",
+                    (card_id,),
+                )
+                # Set as active card
+                await conn.execute(
+                    "UPDATE user_cards SET is_active = 0 WHERE user_id = ?",
+                    (user_id,),
+                )
+                await conn.execute(
+                    "UPDATE user_cards SET is_active = 1 WHERE id = ?",
+                    (card_id,),
+                )
         await conn.commit()
+
+
+# --- QR Cards ---
+
+async def get_qr_card(user_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM qr_cards WHERE user_id = ?", (user_id,)
+        )
+        return await cursor.fetchone()
+
+
+async def upsert_qr_card(user_id, **fields):
+    if not fields:
+        return
+    cols = list(fields.keys())
+    set_clause = ', '.join(f'{c} = excluded.{c}' for c in cols)
+    col_names = ', '.join(['user_id'] + cols)
+    placeholders = ', '.join(['?'] * (1 + len(cols)))
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        await conn.execute(
+            f"""INSERT INTO qr_cards ({col_names})
+               VALUES ({placeholders})
+               ON CONFLICT(user_id) DO UPDATE SET {set_clause},
+               updated_at = CURRENT_TIMESTAMP""",
+            (user_id, *[fields[c] for c in cols]),
+        )
+        await conn.commit()
+
+
+async def count_ordered_qr_cards(user_id):
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        cursor = await conn.execute(
+            """SELECT COALESCE(SUM(quantity), 0) FROM card_orders
+               WHERE user_id = ? AND card_type = 'qr' AND payment_status = 'paid'""",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0

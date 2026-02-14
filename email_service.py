@@ -51,6 +51,7 @@ def send_card_order_email(order, user, card, gateway_base):
         mail = mt.Mail(
             sender=mt.Address(email="noreply@heavymeta.art", name="Heavymeta Collective"),
             to=[mt.Address(email=CARD_VENDOR_EMAIL)],
+            cc=[mt.Address(email="orders@heavymeta.art", name="Heavymeta Orders")],
             subject=f"NFC Card Order — {order_id} — {moniker}",
             html=f"""
             <h1>NFC Card Order</h1>
@@ -58,6 +59,52 @@ def send_card_order_email(order, user, card, gateway_base):
               <tr><td><strong>Order ID</strong></td><td>{order_id}</td></tr>
               <tr><td><strong>Member</strong></td><td>{moniker} ({user['email']})</td></tr>
               <tr><td><strong>Tier</strong></td><td>{user['member_type']}</td></tr>
+              <tr><td><strong>Payment</strong></td><td>{order['payment_method']} — ${order['amount_usd']:.2f} USD</td></tr>
+            </table>
+            <h2>Card Images</h2>
+            <p><strong>Front:</strong> <a href="{front_link}">{front_link}</a></p>
+            <p><strong>Back:</strong> <a href="{back_link}">{back_link}</a></p>
+            <h2>Shipping Address</h2>
+            <p>
+              {order['shipping_name']}<br>
+              {order['shipping_street']}<br>
+              {order['shipping_city']}, {order['shipping_state']} {order['shipping_zip']}<br>
+              {order['shipping_country']}
+            </p>
+            """,
+        )
+        client = mt.MailtrapClient(token=MAILTRAP_API_TOKEN)
+        client.send(mail)
+    except Exception:
+        pass  # don't block order finalization on email failure
+
+
+def send_qr_card_order_email(order, user, qr_card, gateway_base):
+    """Send QR card order details to the vendor for fulfillment."""
+    if not CARD_VENDOR_EMAIL:
+        return
+
+    order_id = order['id']
+    moniker = user['moniker']
+    quantity = order.get('quantity', 50)
+    qr_card_dict = dict(qr_card) if qr_card else {}
+    front_link = f"{gateway_base}/ipfs/{qr_card_dict['front_image_cid']}" if qr_card_dict.get('front_image_cid') else 'N/A'
+    back_link = f"{gateway_base}/ipfs/{qr_card_dict['back_image_cid']}" if qr_card_dict.get('back_image_cid') else 'N/A'
+
+    try:
+        mail = mt.Mail(
+            sender=mt.Address(email="noreply@heavymeta.art", name="Heavymeta Collective"),
+            to=[mt.Address(email=CARD_VENDOR_EMAIL)],
+            cc=[mt.Address(email="orders@heavymeta.art", name="Heavymeta Orders")],
+            subject=f"QR Card Order — {order_id} — {moniker} — {quantity} pcs",
+            html=f"""
+            <h1>QR Business Card Order</h1>
+            <table>
+              <tr><td><strong>Order ID</strong></td><td>{order_id}</td></tr>
+              <tr><td><strong>Member</strong></td><td>{moniker} ({user['email']})</td></tr>
+              <tr><td><strong>Tier</strong></td><td>{user['member_type']}</td></tr>
+              <tr><td><strong>Card Type</strong></td><td>QR Business Card</td></tr>
+              <tr><td><strong>Quantity</strong></td><td>{quantity} pcs</td></tr>
               <tr><td><strong>Payment</strong></td><td>{order['payment_method']} — ${order['amount_usd']:.2f} USD</td></tr>
             </table>
             <h2>Card Images</h2>

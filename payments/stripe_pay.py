@@ -69,6 +69,36 @@ def create_card_checkout_session(order_id, email, card_id, amount_usd,
     return session
 
 
+def create_qr_card_checkout_session(email, amount_usd, quantity, user_id,
+                                     base_url='http://localhost:8080'):
+    price_cents = int(amount_usd * 100)
+
+    session = stripe.checkout.Session.create(
+        payment_method_types=['card'],
+        line_items=[{
+            'price_data': {
+                'currency': 'usd',
+                'unit_amount': price_cents,
+                'product_data': {
+                    'name': f'Heavymeta Collective — QR Business Cards ({quantity} pcs)',
+                    'description': f'{quantity} custom QR business cards',
+                },
+            },
+            'quantity': 1,
+        }],
+        mode='payment',
+        success_url=f'{base_url}/qr-card/order/success?session_id={{CHECKOUT_SESSION_ID}}',
+        cancel_url=f'{base_url}/card/editor',
+        customer_email=email,
+        metadata={
+            'purchase_type': 'qr_card',
+            'user_id': user_id,
+            'quantity': str(quantity),
+        },
+    )
+    return session
+
+
 def retrieve_checkout_session(session_id):
     """Retrieve a completed Stripe checkout session and extract enrollment data."""
     cs = stripe.checkout.Session.retrieve(session_id)
@@ -92,6 +122,15 @@ def handle_webhook(payload, sig_header):
     if event['type'] == 'checkout.session.completed':
         session = event['data']['object']
         purchase_type = session['metadata'].get('purchase_type', 'enrollment')
+
+        if purchase_type == 'qr_card':
+            return {
+                'completed': True,
+                'purchase_type': 'qr_card',
+                'user_id': session['metadata']['user_id'],
+                'quantity': int(session['metadata'].get('quantity', 50)),
+                'payment_intent': session.get('payment_intent', ''),
+            }
 
         if purchase_type == 'card':
             return {

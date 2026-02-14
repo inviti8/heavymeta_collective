@@ -62,6 +62,14 @@ controls.enableDamping = true;
 controls.minDistance = 3;
 controls.maxDistance = 8;
 
+// ─── Card mode state (NFC / QR) ─────────────────────────────────────────────
+
+let cardMode = container.dataset.cardMode || 'nfc';
+
+// Store NFC textures so we can restore them when switching back
+const nfcTextures = { front: null, back: null };
+const qrTextures = { front: null, back: null };
+
 // ─── Texture loading ────────────────────────────────────────────────────────
 
 const loader = new THREE.TextureLoader();
@@ -73,10 +81,16 @@ window.updateCardTexture = function (face, url) {
     material.map = texture;
     material.color.set(0xffffff);
     material.needsUpdate = true;
+    // Cache texture for current mode
+    if (cardMode === 'nfc') {
+      nfcTextures[face] = texture;
+    } else {
+      qrTextures[face] = texture;
+    }
   });
 };
 
-// Load initial textures if available
+// Load initial NFC textures if available
 const initialFrontTexture = container.dataset.frontTexture;
 const initialBackTexture = container.dataset.backTexture;
 if (initialFrontTexture) {
@@ -84,6 +98,73 @@ if (initialFrontTexture) {
 }
 if (initialBackTexture) {
   window.updateCardTexture('back', initialBackTexture);
+}
+
+// Pre-cache QR textures from data attributes
+const qrFrontUrl = container.dataset.qrFrontTexture || '';
+const qrBackUrl = container.dataset.qrBackTexture || '';
+if (qrFrontUrl) {
+  loader.load(qrFrontUrl, (texture) => {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    qrTextures.front = texture;
+  });
+}
+if (qrBackUrl) {
+  loader.load(qrBackUrl, (texture) => {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    qrTextures.back = texture;
+  });
+}
+
+// ─── Mode toggle (NFC ↔ QR) ─────────────────────────────────────────────────
+
+const toggleBtn = document.createElement('button');
+toggleBtn.innerHTML = `<span class="material-icons" style="font-size:20px;margin-right:4px;">swap_horiz</span><span class="toggle-label">NFC</span>`;
+toggleBtn.style.cssText = `
+  position: fixed; top: 16px; left: 16px; z-index: 6000;
+  height: 40px; padding: 0 16px; border-radius: 20px;
+  background: rgba(140, 82, 255, 0.85); border: none; cursor: pointer;
+  color: white; display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 14px; letter-spacing: 0.5px;
+  backdrop-filter: blur(4px); box-shadow: 0 2px 12px rgba(140,82,255,0.4);
+`;
+toggleBtn.addEventListener('click', () => {
+  const trigger = document.getElementById('card-mode-trigger');
+  if (trigger) trigger.click();
+});
+document.body.appendChild(toggleBtn);
+
+function applyModeTextures(mode) {
+  const textures = mode === 'qr' ? qrTextures : nfcTextures;
+  // Front
+  if (textures.front) {
+    frontMaterial.map = textures.front;
+    frontMaterial.color.set(0xffffff);
+  } else {
+    frontMaterial.map = null;
+    frontMaterial.color.set(0x333333);
+  }
+  frontMaterial.needsUpdate = true;
+  // Back
+  if (textures.back) {
+    backMaterial.map = textures.back;
+    backMaterial.color.set(0xffffff);
+  } else {
+    backMaterial.map = null;
+    backMaterial.color.set(0x333333);
+  }
+  backMaterial.needsUpdate = true;
+}
+
+window.setCardMode = function (mode) {
+  cardMode = mode;
+  toggleBtn.querySelector('.toggle-label').textContent = mode.toUpperCase();
+  applyModeTextures(mode);
+};
+
+// Apply initial mode if QR
+if (cardMode === 'qr') {
+  toggleBtn.querySelector('.toggle-label').textContent = 'QR';
 }
 
 // ─── Raycasting — detect which face the pointer is over ─────────────────────
@@ -129,6 +210,13 @@ canvas.addEventListener('pointerdown', (e) => {
     } else {
       window.__cardUploadFace = 'front';
     }
+
+    // In QR mode, block front-face upload (server-generated)
+    if (cardMode === 'qr' && window.__cardUploadFace === 'front') {
+      holdTimer = null;
+      return;
+    }
+
     fileInput.click();
     holdTimer = null;
   }, HOLD_MS);

@@ -5,6 +5,7 @@
     "description": "Linktree only",
     "join_usd": 0, "annual_usd": 0,
     "cards_included": 0, "card_price_usd": 19.99,
+    "qr_cards_included": 0, "qr_card_price_usd": 4.99,
     "image": "/static/tier0.png"
   },
   {
@@ -13,6 +14,7 @@
     "description": "QR cards, basic access",
     "join_usd": 29.99, "annual_usd": 49.99,
     "cards_included": 1, "card_price_usd": 14.99,
+    "qr_cards_included": 50, "qr_card_price_usd": 2.99,
     "image": "/static/tier1.png"
   },
   {
@@ -21,6 +23,7 @@
     "description": "NFC cards, Pintheon node, full access",
     "join_usd": 59.99, "annual_usd": 99.99,
     "cards_included": 1, "card_price_usd": 14.99,
+    "qr_cards_included": 50, "qr_card_price_usd": 2.49,
     "image": "/static/tier3.png"
   },
   {
@@ -29,6 +32,7 @@
     "description": "Limited to 100 — governance vote, unlimited invites",
     "join_usd": 79.99, "annual_usd": 49.99,
     "cards_included": 2, "card_price_usd": 9.99,
+    "qr_cards_included": 100, "qr_card_price_usd": 1.99,
     "image": "/static/tier4.png"
   },
   {
@@ -37,6 +41,7 @@
     "description": "Advisory board access",
     "join_usd": 149.99, "annual_usd": 249.99,
     "cards_included": 3, "card_price_usd": 9.99,
+    "qr_cards_included": 200, "qr_card_price_usd": 1.49,
     "image": "/static/tier5.png"
   }
 ]
